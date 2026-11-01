@@ -73,9 +73,11 @@ jobs:
           name: NDI-Audio-Bridge-Windows
           path: NDI-Audio-Bridge-Windows.zip
 
+  # Publishes a release when a v* tag is pushed, or when main is pushed with a
+  # version in CMakeLists.txt that has no release yet (bump the version to release).
   release:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: [macos, windows]
     runs-on: ubuntu-latest
     permissions:
@@ -83,13 +85,37 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Decide release tag
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version=$(sed -nE 's/^project\(NDIAudioBridge VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; bump the version in CMakeLists.txt to publish a new one."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/download-artifact@v7
+        if: steps.version.outputs.publish == 'true'
         with:
           path: artifacts
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
+        if: steps.version.outputs.publish == 'true'
         with:
-          name: NDI Audio Bridge ${{ github.ref_name }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: NDI Audio Bridge ${{ steps.version.outputs.tag }}
           body_path: .github/release-notes.md
           files: artifacts/*.zip

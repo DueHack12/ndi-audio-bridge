@@ -154,11 +154,9 @@ scripts/macos/install-virtual-device.sh build-virtual-device/NDIAudioBridge.driv
 
 **Prebuilt downloads** are on the [Releases page](../../releases). The workflow in
 `.github/workflows/build.yml` builds the macOS zip (app + virtual device) and the Windows zip on
-every push (downloadable from the run's *Artifacts*). Pushing a version tag publishes a release:
-
-```bash
-git tag -a v0.1.1 -m "v0.1.1" && git push origin v0.1.1
-```
+every push (downloadable from the run's *Artifacts*). To publish a new release, bump the version
+in `CMakeLists.txt` (`project(NDIAudioBridge VERSION 0.1.1 ...)`) and push to `main`. The
+workflow creates the `v0.1.1` tag and release with both zips. Pushing a `v*` tag works too.
 
 ### Self-test
 
