@@ -46,11 +46,11 @@ public:
 private:
     struct MainWindow : public juce::DocumentWindow
     {
-        MainWindow (const juce::String& name, AudioEngine& engine)
+        MainWindow (const juce::String& name, AudioEngine& audioEngine)
             : DocumentWindow (name, juce::Colour (0xff111317), DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            content = new MainComponent (engine);
+            content = new MainComponent (audioEngine);
             setContentOwned (content, true);
             setResizable (true, true);
             setResizeLimits (1100, 720, 3000, 2000);
