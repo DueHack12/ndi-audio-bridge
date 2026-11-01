@@ -1,0 +1,91 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS (universal)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build app + self-test
+        run: cmake --build build --config Release --target NDIAudioBridge NDIAudioBridgeSelfTest -j 4
+
+      - name: Self-test
+        run: ./build/NDIAudioBridgeSelfTest_artefacts/Release/NDIAudioBridgeSelfTest
+
+      - name: Build "NDI Audio Bridge" virtual audio device
+        run: bash scripts/macos/build-virtual-device.sh build/virtual-device
+
+      - name: Package
+        run: |
+          PKG="dist/NDI Audio Bridge"
+          mkdir -p "$PKG"
+          cp -R "build/NDIAudioBridge_artefacts/Release/NDI Audio Bridge.app" "$PKG/"
+          codesign --force --deep --sign - "$PKG/NDI Audio Bridge.app"
+          cp -R build/virtual-device/NDIAudioBridge.driver "$PKG/"
+          cp scripts/macos/install-virtual-device.sh "$PKG/Install Virtual Audio Device.command"
+          chmod +x "$PKG/Install Virtual Audio Device.command"
+          cp README.md "$PKG/README.md"
+          cd dist && ditto -c -k --keepParent "NDI Audio Bridge" ../NDI-Audio-Bridge-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NDI-Audio-Bridge-macOS
+          path: NDI-Audio-Bridge-macOS.zip
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build app + self-test
+        run: cmake --build build --config Release --target NDIAudioBridge NDIAudioBridgeSelfTest -- /m
+
+      - name: Self-test
+        run: build\NDIAudioBridgeSelfTest_artefacts\Release\NDIAudioBridgeSelfTest.exe
+        shell: cmd
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $pkg = "dist/NDI Audio Bridge"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item "build/NDIAudioBridge_artefacts/Release/NDI Audio Bridge.exe" $pkg
+          Copy-Item README.md $pkg
+          Compress-Archive -Path $pkg -DestinationPath NDI-Audio-Bridge-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NDI-Audio-Bridge-Windows
+          path: NDI-Audio-Bridge-Windows.zip
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.zip
