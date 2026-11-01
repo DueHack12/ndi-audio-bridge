@@ -175,8 +175,10 @@ scripts/macos/             virtual audio device build/install
 
 ## Licenses
 
-* JUCE is used under its open-source license (AGPLv3). A commercial JUCE license is
-  needed to distribute this as closed-source.
+* This project's own source code is MIT-licensed (see [LICENSE](LICENSE)).
+* It's built with JUCE, which is used under its open-source license (AGPLv3). So the compiled
+  app as a whole falls under AGPLv3 unless you have a commercial JUCE license. For personal or
+  in-house use this changes nothing; it only matters if you distribute the app.
 * NDI headers in `third_party/ndi` are MIT-licensed. The NDI runtime is installed separately
   and covered by the NDI license. NDI® is a registered trademark of Vizrt NDI AB.
 * The macOS virtual device is built from [BlackHole](https://github.com/ExistentialAudio/BlackHole)
