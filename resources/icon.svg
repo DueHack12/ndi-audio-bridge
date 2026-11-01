@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4c6fff"/>
+      <stop offset="0.55" stop-color="#2b3aa8"/>
+      <stop offset="1" stop-color="#141a4f"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="meter" x1="0" y1="1" x2="0" y2="0" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#22c55e"/>
+      <stop offset="0.7" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#a7f3d0"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  </g>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#sheen)"/>
+  <g filter="url(#glow)" opacity="0.98">
+    <rect x="269.0" y="533.5" width="46" height="106.5" rx="23.0" fill="url(#meter)"/><rect x="342.0" y="416.5" width="46" height="223.5" rx="23.0" fill="url(#meter)"/><rect x="415.0" y="448.5" width="46" height="191.5" rx="23.0" fill="url(#meter)"/><rect x="489.0" y="313.0" width="46" height="327.0" rx="23.0" fill="url(#meter)"/><rect x="563.0" y="417.6" width="46" height="222.4" rx="23.0" fill="url(#meter)"/><rect x="636.0" y="394.7" width="46" height="245.3" rx="23.0" fill="url(#meter)"/><rect x="709.0" y="541.2" width="46" height="98.8" rx="23.0" fill="url(#meter)"/>
+  </g>
+  <path d="M 222 664 C 226 140, 798 140, 802 664"
+        fill="none" stroke="#ffffff" stroke-width="42" stroke-linecap="round"/>
+  <line x1="180" y1="664" x2="844" y2="664" stroke="#ffffff" stroke-width="42" stroke-linecap="round"/>
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="22">
+    <path d="M 300 760 q 35 -22 70 0 t 70 0 t 70 0 t 70 0 t 70 0 t 70 0" stroke-opacity="0.38"/>
+    <path d="M 405 828 q 35 -22 70 0 t 70 0 t 70 0" stroke-opacity="0.22"/>
+  </g>
+</svg>

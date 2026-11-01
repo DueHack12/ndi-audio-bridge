@@ -81,6 +81,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+
       - uses: actions/download-artifact@v7
         with:
           path: artifacts
@@ -88,4 +90,6 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          name: NDI Audio Bridge ${{ github.ref_name }}
+          body_path: .github/release-notes.md
           files: artifacts/*.zip

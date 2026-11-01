@@ -1,3 +1,5 @@
+<img src="resources/icon.png" alt="" width="112" align="right">
+
 # NDI Audio Bridge
 
 Send the inputs of an audio interface (e.g. a TASCAM US-4x4HR) to vMix as separate
@@ -150,9 +152,13 @@ scripts/macos/build-virtual-device.sh
 scripts/macos/install-virtual-device.sh build-virtual-device/NDIAudioBridge.driver
 ```
 
-**Prebuilt downloads:** push this repo to GitHub. The workflow in `.github/workflows/build.yml`
-builds the macOS zip (app + virtual device) and the Windows zip on every push. Download them
-from the run's *Artifacts*. Pushing a tag like `v0.1.0` also attaches them to a GitHub Release.
+**Prebuilt downloads** are on the [Releases page](../../releases). The workflow in
+`.github/workflows/build.yml` builds the macOS zip (app + virtual device) and the Windows zip on
+every push (downloadable from the run's *Artifacts*). Pushing a version tag publishes a release:
+
+```bash
+git tag -a v0.1.1 -m "v0.1.1" && git push origin v0.1.1
+```
 
 ### Self-test
 

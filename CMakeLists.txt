@@ -56,6 +56,7 @@ juce_add_gui_app(NDIAudioBridge
     COMPANY_NAME "NDI Audio Bridge"
     BUNDLE_ID "com.ndiaudiobridge.app"
     VERSION ${PROJECT_VERSION}
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "NDI Audio Bridge needs audio input access to send your interface inputs over NDI."
     PLIST_TO_MERGE [[
