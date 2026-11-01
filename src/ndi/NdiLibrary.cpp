@@ -1,16 +1,12 @@
 #include "NdiLibrary.h"
 
-#include <cstdlib>
-
 namespace ndi
 {
 namespace
 {
 juce::String getEnv (const char* name)
 {
-    if (auto* v = std::getenv (name))
-        return juce::String::fromUTF8 (v);
-    return {};
+    return juce::SystemStats::getEnvironmentVariable (name, {});
 }
 
 juce::StringArray candidatePaths()
