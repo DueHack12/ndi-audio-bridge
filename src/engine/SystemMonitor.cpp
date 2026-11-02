@@ -13,6 +13,7 @@
   #define NOMINMAX
  #endif
  #include <winsock2.h>
+ #include <ws2ipdef.h>   // must come before iphlpapi.h, or the MIB_IF_ROW2 / GetIfTable2 API is hidden
  #include <windows.h>
  #include <iphlpapi.h>
  #include <netioapi.h>

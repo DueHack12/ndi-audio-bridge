@@ -63,9 +63,9 @@ public:
 
         removeButton.onClick = [this]
         {
-            juce::MessageManager::callAsync ([&e = engine, s = slot, safeOwner = juce::Component::SafePointer<InterfacesPage> (&owner)]
+            juce::MessageManager::callAsync ([&e = engine, slotIndex = slot, safeOwner = juce::Component::SafePointer<InterfacesPage> (&owner)]
             {
-                e.removeInterface (s);
+                e.removeInterface (slotIndex);
                 if (safeOwner != nullptr && safeOwner->onChanged)
                     safeOwner->onChanged();
             });
