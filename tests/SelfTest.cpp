@@ -1,10 +1,13 @@
 // Headless checks that run without audio hardware:
 //   1. DriftFifo: clock drift, bursty network delivery and 48k->44.1k conversion
 //      must produce a clean, continuous tone with no dropouts.
-//   2. NDI loopback (only if an NDI runtime is installed): send a tone through
+//   2. Headphone matrix: per-side routing in STEREO and 2x MONO pairs, driving
+//      the real AudioEngine callback with a fake 4-in / 4-out interface.
+//   3. NDI loopback (only if an NDI runtime is installed): send a tone through
 //      NdiSendHub, receive it with NdiReceiver, and check it arrives intact.
 
 #include "dsp/DriftFifo.h"
+#include "engine/AudioEngine.h"
 #include "ndi/NdiFinder.h"
 #include "ndi/NdiLibrary.h"
 #include "ndi/NdiReceiver.h"
@@ -134,6 +137,98 @@ void driftScenario (const char* name, double producerRate, double drift, double 
                  (actualProducerRate / producerRate - 1.0) * 1e6);
 }
 
+
+/** A stand-in interface: 4 inputs, 4 outputs, 48 kHz, all channels active. */
+struct FakeInterface : juce::AudioIODevice
+{
+    FakeInterface() : juce::AudioIODevice ("Fake TASCAM", "Test") {}
+    juce::StringArray getOutputChannelNames() override { return { "Out 1", "Out 2", "Out 3", "Out 4" }; }
+    juce::StringArray getInputChannelNames() override  { return { "In 1", "In 2", "In 3", "In 4" }; }
+    juce::Array<double> getAvailableSampleRates() override { return { 48000.0 }; }
+    juce::Array<int> getAvailableBufferSizes() override  { return { 256 }; }
+    int getDefaultBufferSize() override { return 256; }
+    juce::String open (const juce::BigInteger&, const juce::BigInteger&, double, int) override { return {}; }
+    void close() override {}
+    bool isOpen() override { return true; }
+    void start (juce::AudioIODeviceCallback*) override {}
+    void stop() override {}
+    bool isPlaying() override { return true; }
+    juce::String getLastError() override { return {}; }
+    int getCurrentBufferSizeSamples() override { return 256; }
+    double getCurrentSampleRate() override { return 48000.0; }
+    int getCurrentBitDepth() override { return 32; }
+    juce::BigInteger getActiveOutputChannels() const override { juce::BigInteger b; b.setRange (0, 4, true); return b; }
+    juce::BigInteger getActiveInputChannels() const override  { juce::BigInteger b; b.setRange (0, 4, true); return b; }
+    int getOutputLatencyInSamples() override { return 0; }
+    int getInputLatencyInSamples() override { return 0; }
+};
+
+void routingMatrix()
+{
+    std::printf ("Headphone matrix routing\n");
+
+    juce::ScopedJuceInitialiser_GUI juceInit; // AudioDeviceManager needs the message system
+    AudioEngine engine;
+    FakeInterface device;
+    auto& cb = engine.getInterfaceCallback();
+    cb.audioDeviceAboutToStart (&device);
+
+    // Constant test signals: In 1 = 0.1, In 2 = 0.2; vMix return L = 0.5, R = 0.25.
+    constexpr int block = 256;
+    std::vector<float> in1 (block, 0.1f), in2 (block, 0.2f), in3 (block, 0.0f), in4 (block, 0.0f);
+    std::vector<std::vector<float>> outs (4, std::vector<float> (block));
+    const float* ins[] = { in1.data(), in2.data(), in3.data(), in4.data() };
+    float* outPtrs[] = { outs[0].data(), outs[1].data(), outs[2].data(), outs[3].data() };
+
+    // The vMix return arrives continuously, one block per callback.
+    engine.setReturnBufferMs (10.0);
+    std::vector<float> retL (block, 0.5f), retR (block, 0.25f);
+
+    auto run = [&]
+    {
+        for (int i = 0; i < 8; ++i) // let the return feed settle
+        {
+            engine.getReturnFifo().push (retL.data(), retR.data(), block, 48000.0);
+            cb.audioDeviceIOCallbackWithContext (ins, 4, outPtrs, 4, block, {});
+        }
+    };
+    auto near = [] (float a, float b) { return std::abs (a - b) < 1.0e-3f; };
+    auto out = [&] (int ch) { return outs[(size_t) ch][block - 1]; };
+
+    // Pair 1 (Out 1/2) STEREO: In 1 on the left only, return on both sides.
+    auto& p1 = engine.getBusConfig (0);
+    p1 = {};
+    p1.stereo = true;
+    p1.routes[0][0] = true;
+    p1.routes[0][bridge::returnSource] = p1.routes[1][bridge::returnSource] = true;
+    engine.applyBusConfig (0);
+
+    // Pair 2 (Out 3/4) 2x MONO: Out 3 = In 2 + return, Out 4 = In 1 at -6 dB.
+    auto& p2 = engine.getBusConfig (1);
+    p2 = {};
+    p2.stereo = false;
+    p2.routes[0][1] = true;
+    p2.routes[0][bridge::returnSource] = true;
+    p2.routes[1][0] = true;
+    p2.gainDbRight = -6.0206f;
+    engine.applyBusConfig (1);
+
+    run();
+    check (near (out (0), 0.6f),   "stereo pair: Out 1 = In 1 + return L (" + juce::String (out (0), 4) + ")");
+    check (near (out (1), 0.25f),  "stereo pair: Out 2 = return R only, In 1 not on the right (" + juce::String (out (1), 4) + ")");
+    check (near (out (2), 0.575f), "2x mono: Out 3 = In 2 + return folded to mono (" + juce::String (out (2), 4) + ")");
+    check (near (out (3), 0.05f),  "2x mono: Out 4 = In 1 with its own -6 dB level (" + juce::String (out (3), 4) + ")");
+
+    // Same routes, pair 1 switched to 2x MONO: the return folds to mono on Out 2.
+    p1.stereo = false;
+    engine.applyBusConfig (0);
+    run();
+    check (near (out (1), 0.375f), "pair switched to 2x mono: Out 2 = mono return (" + juce::String (out (1), 4) + ")");
+    check (near (out (0), 0.475f), "pair switched to 2x mono: Out 1 = In 1 + mono return (" + juce::String (out (0), 4) + ")");
+
+    cb.audioDeviceStopped();
+}
+
 void ndiLoopback()
 {
     std::printf ("NDI loopback\n");
@@ -243,6 +338,7 @@ int main()
     driftScenario ("computer audio, 512 blocks, +80 ppm", 48000.0, 80e-6, 48000.0, 512, 128, 30.0, 2.0);
     driftScenario ("48 kHz NDI into 44.1 kHz interface", 48000.0, 50e-6, 44100.0, 1600, 256, 60.0, 8.0);
 
+    routingMatrix();
     ndiLoopback();
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");

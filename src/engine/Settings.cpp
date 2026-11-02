@@ -62,12 +62,26 @@ void restoreConfig (AudioEngine& engine)
 
         auto& bc = engine.getBusConfig (b);
         bc.name = e->getStringAttribute ("name", bc.name);
+        bc.nameRight = e->getStringAttribute ("nameRight", bc.nameRight);
         bc.gainDb = (float) e->getDoubleAttribute ("gainDb", bc.gainDb);
+        bc.gainDbRight = (float) e->getDoubleAttribute ("gainDbRight", bc.gainDb);
+        bc.stereo = e->getBoolAttribute ("stereo", true);
 
-        const auto routes = e->getStringAttribute ("routes");
-        if (routes.length() == numSources)
+        auto readRoutes = [&] (const juce::String& attr, bool* dest)
+        {
+            const auto text = e->getStringAttribute (attr);
+            if (text.length() != numSources)
+                return false;
             for (int s = 0; s < numSources; ++s)
-                bc.routes[s] = routes[s] == '1';
+                dest[s] = text[s] == '1';
+            return true;
+        };
+
+        // v0.1.0 stored one route per pair ("routes"): apply it to both sides.
+        if (! readRoutes ("routesL", bc.routes[0]) && readRoutes ("routes", bc.routes[0]))
+            std::copy (std::begin (bc.routes[0]), std::end (bc.routes[0]), std::begin (bc.routes[1]));
+        else
+            readRoutes ("routesR", bc.routes[1]);
     }
 
     engine.setReturnSource (xml->getStringAttribute ("returnSource"));
@@ -103,11 +117,17 @@ void save (AudioEngine& engine)
         e->setAttribute ("index", b);
         e->setAttribute ("name", bc.name);
         e->setAttribute ("gainDb", bc.gainDb);
+        e->setAttribute ("stereo", bc.stereo);
+        e->setAttribute ("nameRight", bc.nameRight);
+        e->setAttribute ("gainDbRight", bc.gainDbRight);
 
-        juce::String routes;
-        for (int s = 0; s < numSources; ++s)
-            routes << (bc.routes[s] ? "1" : "0");
-        e->setAttribute ("routes", routes);
+        for (int side = 0; side < 2; ++side)
+        {
+            juce::String routes;
+            for (int s = 0; s < numSources; ++s)
+                routes << (bc.routes[side][s] ? "1" : "0");
+            e->setAttribute (side == 0 ? "routesL" : "routesR", routes);
+        }
     }
 
     auto& file = getFile();

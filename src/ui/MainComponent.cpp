@@ -287,23 +287,23 @@ private:
 };
 
 //==============================================================================
-/** The headphone matrix: rows = sources, columns = output pairs. */
+/** The headphone matrix: rows = sources, columns = output channels, grouped in pairs.
+
+    Each pair (Out 1/2, Out 3/4, ...) is either one STEREO mix or 2x MONO (two
+    independent mixes). Every cell routes a source to one output channel, so
+    left and right are always controllable separately. */
 class MatrixPanel : public juce::Component
 {
 public:
     MatrixPanel (AudioEngine& e, std::function<void()> onChange) : engine (e), changed (std::move (onChange)) {}
 
+    ~MatrixPanel() override { detachEditors(); }
+
     void rebuild (int numInputs, int numBuses)
     {
-        for (auto* col : buses)
-        {
-            col->name.onFocusLost = nullptr;
-            col->name.onReturnKey = nullptr;
-        }
-
-        buses.clear();
+        detachEditors();
+        pairs.clear();
         rowLabels.clear();
-        cells.clear();
         rowSources.clear();
 
         for (int i = 0; i < numInputs; ++i) rowSources.push_back (i);
@@ -311,45 +311,7 @@ public:
         rowSources.push_back (returnSource);
 
         for (int b = 0; b < numBuses; ++b)
-        {
-            auto* col = buses.add (new BusColumn());
-            auto& bc = engine.getBusConfig (b);
-
-            styleEditor (col->name);
-            col->name.setFont (uiFont (13.0f, true));
-            col->name.setJustification (juce::Justification::centred);
-            col->name.setText (bc.name, false);
-            col->name.setTooltip ("Name this mix (e.g. who wears these headphones)");
-            auto commit = [this, b, col]
-            {
-                engine.getBusConfig (b).name = col->name.getText().trim();
-                changed();
-            };
-            col->name.onReturnKey = commit;
-            col->name.onFocusLost = commit;
-            addAndMakeVisible (col->name);
-
-            col->channels.setText (engine.getBusChannelLabel (b), juce::dontSendNotification);
-            col->channels.setJustificationType (juce::Justification::centred);
-            col->channels.setFont (uiFont (12.5f, true));
-            col->channels.setColour (juce::Label::textColourId, theme::dim);
-            addAndMakeVisible (col->channels);
-
-            styleGainSlider (col->gain, -60.0, 12.0);
-            col->gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 18);
-            col->gain.setValue (bc.gainDb, juce::dontSendNotification);
-            col->gain.setTooltip ("Headphone mix level. Double-click for 0 dB.");
-            col->gain.onValueChange = [this, b, col]
-            {
-                engine.getBusConfig (b).gainDb = (float) col->gain.getValue();
-                engine.applyBusConfig (b);
-                changed();
-            };
-            addAndMakeVisible (col->gain);
-
-            addAndMakeVisible (col->meterL);
-            addAndMakeVisible (col->meterR);
-        }
+            buildPair (b);
 
         for (auto s : rowSources)
         {
@@ -357,22 +319,6 @@ public:
             l->setFont (uiFont (14.0f, s >= maxInputs));
             l->setColour (juce::Label::textColourId, theme::text);
             addAndMakeVisible (l);
-
-            for (int b = 0; b < numBuses; ++b)
-            {
-                auto* cell = cells.add (new juce::TextButton());
-                styleToggle (*cell, theme::route);
-                cell->setToggleState (engine.getBusConfig (b).routes[s], juce::dontSendNotification);
-                cell->onClick = [this, s, b, cell]
-                {
-                    engine.getBusConfig (b).routes[s] = cell->getToggleState();
-                    engine.applyBusConfig (b);
-                    updateCellText (*cell);
-                    changed();
-                };
-                updateCellText (*cell);
-                addAndMakeVisible (cell);
-            }
         }
 
         refreshNames();
@@ -389,20 +335,22 @@ public:
                 label = "IN " + juce::String (s + 1) + "   " + label;
             rowLabels[(int) r]->setText (label, juce::dontSendNotification);
         }
+
+        for (auto* p : pairs)
+            updateCellTooltips (*p);
     }
 
     void tick()
     {
-        for (int b = 0; b < buses.size(); ++b)
+        for (int b = 0; b < pairs.size(); ++b)
         {
-            buses[b]->meterL.push (engine.getBusMeter (b, 0).readAndReset());
-            buses[b]->meterR.push (engine.getBusMeter (b, 1).readAndReset());
+            pairs[b]->side[0].meter.push (engine.getBusMeter (b, 0).readAndReset());
+            pairs[b]->side[1].meter.push (engine.getBusMeter (b, 1).readAndReset());
         }
     }
 
     void paint (juce::Graphics& g) override
     {
-        // zebra rows
         for (size_t r = 0; r < rowSources.size(); ++r)
         {
             auto row = rowBounds ((int) r);
@@ -417,78 +365,304 @@ public:
                 g.fillRect (row);
             }
         }
+
+        // Dividers between output pairs
+        g.setColour (theme::panelEdge);
+        for (int b = 1; b < pairs.size(); ++b)
+        {
+            const int x = pairBounds (b).getX();
+            g.drawVerticalLine (x, 4.0f, (float) getHeight() - 4.0f);
+        }
     }
 
     void resized() override
     {
-        auto r = getLocalBounds();
-        auto header = r.removeFromTop (headerHeight);
-        header.removeFromLeft (labelWidth);
-
-        const int n = buses.size();
-        if (n == 0)
+        if (pairs.isEmpty())
             return;
 
-        const int colWidth = header.getWidth() / n;
-
-        for (int b = 0; b < n; ++b)
+        for (int b = 0; b < pairs.size(); ++b)
         {
-            auto col = header.removeFromLeft (colWidth).reduced (6, 0);
-            auto* bc = buses[b];
-            bc->name.setBounds (col.removeFromTop (28));
-            bc->channels.setBounds (col.removeFromTop (20));
-            bc->gain.setBounds (col.removeFromTop (44));
-            col.removeFromTop (4);
-            bc->meterL.setBounds (col.removeFromTop (6));
-            col.removeFromTop (2);
-            bc->meterR.setBounds (col.removeFromTop (6));
+            auto& p = *pairs[b];
+            const bool split = ! p.stereo();
+            auto area = pairBounds (b).withHeight (headerHeight).reduced (6, 0);
+
+            auto modeRow = area.removeFromTop (24);
+            p.stereoButton.setVisible (p.hasRight);
+            p.monoButton.setVisible (p.hasRight);
+            p.stereoButton.setBounds (modeRow.removeFromLeft (modeRow.getWidth() / 2).withTrimmedRight (1));
+            p.monoButton.setBounds (modeRow.withTrimmedLeft (1));
+            area.removeFromTop (6);
+
+            auto layoutSide = [] (Side& side, juce::Rectangle<int> col, bool meterOnly)
+            {
+                if (! meterOnly)
+                {
+                    side.name.setBounds (col.removeFromTop (26));
+                    side.channels.setBounds (col.removeFromTop (18));
+                    side.gain.setBounds (col.removeFromTop (40));
+                }
+                else
+                {
+                    col.removeFromTop (26 + 18 + 40);
+                }
+                col.removeFromTop (5);
+                return col;
+            };
+
+            if (split)
+            {
+                auto left = area.removeFromLeft (area.getWidth() / 2).withTrimmedRight (3);
+                auto right = area.withTrimmedLeft (3);
+                p.side[0].meter.setBounds (layoutSide (p.side[0], left, false).removeFromTop (8));
+                p.side[1].meter.setBounds (layoutSide (p.side[1], right, false).removeFromTop (8));
+            }
+            else
+            {
+                auto rest = layoutSide (p.side[0], area, false);
+                p.side[0].meter.setBounds (rest.removeFromTop (5));
+                rest.removeFromTop (2);
+                p.side[1].meter.setBounds (rest.removeFromTop (5));
+            }
+
+            for (int sd = 0; sd < 2; ++sd)
+            {
+                auto& side = p.side[sd];
+                const bool showControls = sd == 0 || (split && p.hasRight);
+                side.name.setVisible (showControls);
+                side.channels.setVisible (showControls);
+                side.gain.setVisible (showControls);
+                side.meter.setVisible (sd == 0 || p.hasRight);
+            }
         }
 
         for (size_t row = 0; row < rowSources.size(); ++row)
         {
             auto rb = rowBounds ((int) row);
-            rowLabels[(int) row]->setBounds (rb.removeFromLeft (labelWidth).withTrimmedLeft (4));
+            rowLabels[(int) row]->setBounds (rb.withWidth (labelWidth).withTrimmedLeft (4));
 
-            for (int b = 0; b < n; ++b)
+            for (int b = 0; b < pairs.size(); ++b)
             {
-                auto cellArea = rb.removeFromLeft (colWidth);
-                const int w = juce::jmin (cellArea.getWidth() - 16, 120);
-                cells[(int) row * n + b]->setBounds (cellArea.withSizeKeepingCentre (w, rowHeight - 8));
+                auto& p = *pairs[b];
+                auto cellsArea = pairBounds (b).withY (rb.getY()).withHeight (rb.getHeight()).reduced (6, 4);
+                auto leftCell = cellsArea.removeFromLeft (cellsArea.getWidth() / 2).withTrimmedRight (2);
+                auto rightCell = cellsArea.withTrimmedLeft (2);
+
+                p.cells[0][row]->setBounds (leftCell);
+                p.cells[1][row]->setBounds (rightCell);
+                p.cells[1][row]->setVisible (p.hasRight);
             }
         }
     }
 
-    int getPreferredHeight() const { return headerHeight + (int) rowSources.size() * rowHeight + 8; }
-
 private:
-    static constexpr int headerHeight = 118, rowHeight = 42, labelWidth = 170;
+    static constexpr int headerHeight = 132, rowHeight = 42, labelWidth = 150;
 
-    juce::Rectangle<int> rowBounds (int row) const
-    {
-        const int extra = rowSources[(size_t) row] >= maxInputs ? 6 : 0; // gap before computer/return rows
-        int y = headerHeight + 6 + row * rowHeight;
-        if (rowSources[(size_t) row] == returnSource) y += 6;
-        return { 0, y + extra, getWidth(), rowHeight };
-    }
-
-    static void updateCellText (juce::TextButton& b)
-    {
-        b.setButtonText (b.getToggleState() ? "ON" : "-");
-    }
-
-    struct BusColumn
+    struct Side
     {
         juce::TextEditor name;
         juce::Label channels;
         juce::Slider gain;
-        LevelMeter meterL, meterR;
+        LevelMeter meter;
     };
+
+    struct Pair
+    {
+        int bus = 0;
+        bool hasRight = true;
+        juce::TextButton stereoButton { "STEREO" }, monoButton { juce::String::fromUTF8 ("2\xc3\x97 MONO") };
+        Side side[2];
+        juce::OwnedArray<juce::TextButton> cells[2]; // [side][row]
+        BusConfig* config = nullptr;
+
+        bool stereo() const { return hasRight && config->stereo; }
+    };
+
+    juce::Rectangle<int> pairBounds (int b) const
+    {
+        const int n = juce::jmax (1, pairs.size());
+        const int width = (getWidth() - labelWidth) / n;
+        return { labelWidth + b * width, 0, width, getHeight() };
+    }
+
+    juce::Rectangle<int> rowBounds (int row) const
+    {
+        const int extra = rowSources[(size_t) row] >= maxInputs ? 6 : 0; // gap before computer/return rows
+        int y = headerHeight + 8 + row * rowHeight;
+        if (rowSources[(size_t) row] == returnSource) y += 6;
+        return { 0, y + extra, getWidth(), rowHeight };
+    }
+
+    void buildPair (int b)
+    {
+        auto* p = pairs.add (new Pair());
+        p->bus = b;
+        p->config = &engine.getBusConfig (b);
+        p->hasRight = engine.busHasSecondOutput (b);
+        auto& bc = *p->config;
+
+        // STEREO | 2x MONO selector
+        for (auto* btn : { &p->stereoButton, &p->monoButton })
+        {
+            styleToggle (*btn, btn == &p->stereoButton ? theme::route.darker (0.35f) : theme::warn.darker (0.35f));
+            btn->setRadioGroupId (1000 + b, juce::dontSendNotification);
+            btn->setConnectedEdges (btn == &p->stereoButton ? juce::Button::ConnectedOnRight : juce::Button::ConnectedOnLeft);
+            addAndMakeVisible (btn);
+        }
+        p->stereoButton.setTooltip ("One stereo mix on this output pair (e.g. a stereo headphone feed)");
+        p->monoButton.setTooltip ("Two separate mono mixes, one per output (e.g. two different headphone feeds)");
+        p->stereoButton.setToggleState (bc.stereo, juce::dontSendNotification);
+        p->monoButton.setToggleState (! bc.stereo, juce::dontSendNotification);
+
+        auto setMode = [this, p] (bool stereo)
+        {
+            if (p->config->stereo == stereo)
+                return;
+            p->config->stereo = stereo;
+            if (! stereo)
+                p->config->gainDbRight = p->config->gainDb; // start the second mix at the same level
+            engine.applyBusConfig (p->bus);
+            refreshPairTexts (*p);
+            resized();
+            repaint();
+            changed();
+        };
+        p->stereoButton.onClick = [p, setMode] { if (p->stereoButton.getToggleState()) setMode (true); };
+        p->monoButton.onClick   = [p, setMode] { if (p->monoButton.getToggleState()) setMode (false); };
+
+        for (int sd = 0; sd < 2; ++sd)
+        {
+            auto& side = p->side[sd];
+
+            styleEditor (side.name);
+            side.name.setFont (uiFont (13.0f, true));
+            side.name.setJustification (juce::Justification::centred);
+            side.name.setTooltip ("Name this mix (e.g. who wears these headphones)");
+            auto commit = [this, p, sd]
+            {
+                auto text = p->side[sd].name.getText().trim();
+                (sd == 0 ? p->config->name : p->config->nameRight) = text;
+                updateCellTooltips (*p);
+                changed();
+            };
+            side.name.onReturnKey = commit;
+            side.name.onFocusLost = commit;
+            addAndMakeVisible (side.name);
+
+            side.channels.setJustificationType (juce::Justification::centred);
+            side.channels.setFont (uiFont (12.5f, true));
+            side.channels.setColour (juce::Label::textColourId, theme::dim);
+            addAndMakeVisible (side.channels);
+
+            styleGainSlider (side.gain, -60.0, 12.0);
+            side.gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 16);
+            side.gain.setTooltip ("Mix level. Double-click for 0 dB.");
+            side.gain.onValueChange = [this, p, sd]
+            {
+                (sd == 0 ? p->config->gainDb : p->config->gainDbRight) = (float) p->side[sd].gain.getValue();
+                engine.applyBusConfig (p->bus);
+                changed();
+            };
+            addAndMakeVisible (side.gain);
+            addAndMakeVisible (side.meter);
+
+            for (size_t row = 0; row < rowSources.size(); ++row)
+            {
+                const int s = rowSources[row];
+                auto* cell = p->cells[sd].add (new juce::TextButton());
+                styleToggle (*cell, theme::route);
+                cell->setToggleState (bc.routes[sd][s], juce::dontSendNotification);
+                cell->onClick = [this, p, sd, s, row]
+                {
+                    const bool on = p->cells[sd][(int) row]->getToggleState();
+                    p->config->routes[sd][s] = on;
+
+                    // Shift-click sets both sides at once.
+                    if (juce::ModifierKeys::currentModifiers.isShiftDown() && p->hasRight)
+                    {
+                        p->config->routes[1 - sd][s] = on;
+                        p->cells[1 - sd][(int) row]->setToggleState (on, juce::dontSendNotification);
+                    }
+
+                    engine.applyBusConfig (p->bus);
+                    refreshPairTexts (*p);
+                    changed();
+                };
+                addAndMakeVisible (cell);
+            }
+        }
+
+        refreshPairTexts (*p);
+    }
+
+    void refreshPairTexts (Pair& p)
+    {
+        const bool split = ! p.stereo();
+        auto& bc = *p.config;
+
+        for (auto& side : p.side)
+        {
+            side.name.setIndents (split ? 2 : 6, 0);
+            side.name.applyFontToAllText (uiFont (split ? 12.0f : 13.0f, true));
+        }
+
+        p.side[0].name.setText (bc.name, false);
+        p.side[1].name.setText (bc.nameRight, false);
+        p.side[0].gain.setValue (bc.gainDb, juce::dontSendNotification);
+        p.side[1].gain.setValue (bc.gainDbRight, juce::dontSendNotification);
+
+        if (split || ! p.hasRight)
+        {
+            p.side[0].channels.setText (engine.getOutputChannelLabel (p.bus, 0), juce::dontSendNotification);
+            p.side[1].channels.setText (engine.getOutputChannelLabel (p.bus, 1), juce::dontSendNotification);
+        }
+        else
+        {
+            p.side[0].channels.setText (engine.getBusChannelLabel (p.bus) + "  (L / R)", juce::dontSendNotification);
+        }
+
+        for (int sd = 0; sd < 2; ++sd)
+        {
+            for (auto* cell : p.cells[sd])
+            {
+                const bool on = cell->getToggleState();
+                cell->setButtonText (split ? (on ? "ON" : "-") : juce::String (sd == 0 ? "L" : "R"));
+            }
+        }
+
+        updateCellTooltips (p);
+    }
+
+    void updateCellTooltips (Pair& p)
+    {
+        const bool split = ! p.stereo();
+
+        for (int sd = 0; sd < 2; ++sd)
+        {
+            for (size_t row = 0; row < rowSources.size() && row < (size_t) p.cells[sd].size(); ++row)
+            {
+                const auto source = engine.getSourceConfig (rowSources[row]).name;
+                const auto dest = split ? (sd == 0 ? p.config->name : p.config->nameRight) + " (" + engine.getOutputChannelLabel (p.bus, sd) + ")"
+                                        : juce::String (sd == 0 ? "the LEFT side of " : "the RIGHT side of ") + p.config->name;
+                p.cells[sd][(int) row]->setTooltip ("Send " + source + " to " + dest
+                                                    + (p.hasRight ? ". Shift-click sets both sides." : "."));
+            }
+        }
+    }
+
+    void detachEditors()
+    {
+        for (auto* p : pairs)
+            for (auto& side : p->side)
+            {
+                side.name.onFocusLost = nullptr;
+                side.name.onReturnKey = nullptr;
+            }
+    }
 
     AudioEngine& engine;
     std::function<void()> changed;
-    juce::OwnedArray<BusColumn> buses;
+    juce::OwnedArray<Pair> pairs;
     juce::OwnedArray<juce::Label> rowLabels;
-    juce::OwnedArray<juce::TextButton> cells;
     std::vector<int> rowSources;
 };
 
@@ -592,7 +766,7 @@ MainComponent::MainComponent (AudioEngine& e) : engine (e)
     refreshReturnSources (true);
     rebuildForDevice();
 
-    setSize (1240, 800);
+    setSize (1320, 820);
     startTimerHz (30);
 }
 
@@ -834,7 +1008,7 @@ void MainComponent::paint (juce::Graphics& g)
     drawPanel (g, sendArea, "SEND TO vMIX", "Each enabled row is its own NDI audio source");
     drawPanel (g, returnArea, "vMIX RETURN", "NDI feed played into the headphone mixes");
     drawPanel (g, computerArea, "COMPUTER AUDIO", "Virtual output for this computer's sound");
-    drawPanel (g, matrixArea, "HEADPHONE MIXES", "Lit = heard in that output pair");
+    drawPanel (g, matrixArea, "HEADPHONE MIXES", "Lit = heard on that output");
 
     // Send panel column headings
     if (! sendRows.isEmpty())
@@ -855,8 +1029,9 @@ void MainComponent::paint (juce::Graphics& g)
     // Matrix footnote
     g.setColour (theme::dim);
     g.setFont (uiFont (12.0f));
-    g.drawFittedText ("Tip: turn the TASCAM's MONITOR MIX knob fully to COMPUTER so the headphones only hear this matrix.",
-                      matrixArea.reduced (14, 10).removeFromBottom (34), juce::Justification::bottomLeft, 2);
+    g.drawFittedText ("Shift-click a cell to set both sides. Turn the TASCAM's MONITOR MIX knob fully to COMPUTER "
+                      "so the headphones only hear this matrix.",
+                      matrixArea.reduced (14, 10).removeFromBottom (34), juce::Justification::bottomLeft, 2, 1.0f);
 }
 
 void MainComponent::resized()
@@ -872,7 +1047,7 @@ void MainComponent::resized()
     }
     area.removeFromTop (8);
 
-    auto left = area.removeFromLeft (juce::roundToInt (area.getWidth() * 0.62));
+    auto left = area.removeFromLeft (juce::roundToInt (area.getWidth() * 0.6));
     left.removeFromRight (8);
     area.removeFromLeft (8);
     matrixArea = area;

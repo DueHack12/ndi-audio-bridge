@@ -41,11 +41,15 @@ struct SourceConfig
     bool sendMuted = false;     // "cough": mutes the NDI send, not the headphones
 };
 
+/** One output pair (Out 1/2, Out 3/4, ...). In stereo mode it is one stereo mix;
+    in dual-mono mode each output is its own mono mix (e.g. two separate headphone
+    feeds). Either way every source can be routed to each side independently. */
 struct BusConfig
 {
-    juce::String name;
-    float gainDb = 0.0f;
-    bool routes[numSources] {};
+    bool stereo = true;
+    juce::String name, nameRight;          // nameRight: the second output's mix in dual-mono mode
+    float gainDb = 0.0f, gainDbRight = 0.0f;
+    bool routes[2][numSources] {};         // [0] = left / first output, [1] = right / second output
 };
 } // namespace bridge
 
@@ -75,6 +79,8 @@ public:
     int getNumBuses() const noexcept    { return numBuses.load(); }
     juce::String getInputChannelName (int index) const;
     juce::String getBusChannelLabel (int bus) const;   // e.g. "Out 1/2"
+    juce::String getOutputChannelLabel (int bus, int side) const; // e.g. "Out 2"
+    bool busHasSecondOutput (int bus) const;           // false for the last pair of an odd count
     juce::String getInterfaceSummary() const;
 
     // ---------------------------------------------------------------- computer audio device
@@ -110,6 +116,9 @@ public:
     DriftFifo& getComputerFifo() noexcept  { return computerFifo; }
 
     static juce::String defaultSourceName (int source);
+
+    /** For tests: drive the interface callback with a fake device. */
+    juce::AudioIODeviceCallback& getInterfaceCallback() noexcept { return *this; }
 
 private:
     // Interface callback
@@ -162,8 +171,10 @@ private:
 
     // Audio-thread parameters
     std::array<std::atomic<float>, bridge::numSources> sourceGain;
-    std::array<std::atomic<float>, bridge::maxBuses> busGain;
-    std::array<std::array<std::atomic<bool>, bridge::maxBuses>, bridge::numSources> routes;
+    // Per output channel (bus * 2 + side)
+    std::array<std::atomic<float>, bridge::maxBuses * 2> outGain;
+    std::array<std::array<std::atomic<bool>, bridge::maxBuses * 2>, bridge::numSources> routes;
+    std::array<std::atomic<bool>, bridge::maxBuses> busStereo;
 
     std::array<bridge::Meter, bridge::numSources> sourceMeters;
     std::array<bridge::Meter, bridge::maxBuses * 2> busMeters;

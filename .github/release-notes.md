@@ -1,3 +1,11 @@
+## What's new in 0.2.0
+
+- **Separate L/R control in the headphone matrix.** Every cell now routes to a single output channel.
+- **STEREO / 2× MONO per output pair.** Use an output pair as one stereo mix, or as two independent mono mixes with their own names, levels and meters.
+- Stereo sources (vMix return, computer audio) keep their sides in stereo pairs and fold to mono in 2× mono.
+- Shift-click a matrix cell to set both sides at once.
+- Settings from 0.1.0 carry over (each old route is applied to both sides).
+
 ## Downloads
 
 | File | For |

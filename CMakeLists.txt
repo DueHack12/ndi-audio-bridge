@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() to take effect on macOS.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(NDIAudioBridge VERSION 0.1.0 LANGUAGES C CXX)
+project(NDIAudioBridge VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -99,11 +99,11 @@ target_link_libraries(NDIAudioBridge
 # ---------------------------------------------------------------------------
 if(NDIAB_BUILD_TESTS)
     juce_add_console_app(NDIAudioBridgeSelfTest PRODUCT_NAME "NDIAudioBridgeSelfTest")
-    target_sources(NDIAudioBridgeSelfTest PRIVATE tests/SelfTest.cpp ${NDIAB_CORE_SOURCES})
+    target_sources(NDIAudioBridgeSelfTest PRIVATE tests/SelfTest.cpp src/engine/AudioEngine.cpp ${NDIAB_CORE_SOURCES})
     target_include_directories(NDIAudioBridgeSelfTest PRIVATE src)
     target_include_directories(NDIAudioBridgeSelfTest SYSTEM PRIVATE ${NDIAB_NDI_INCLUDE})
     target_compile_definitions(NDIAudioBridgeSelfTest PRIVATE ${NDIAB_COMMON_DEFS})
     target_link_libraries(NDIAudioBridgeSelfTest
-        PRIVATE juce::juce_core juce::juce_audio_basics
+        PRIVATE juce::juce_core juce::juce_audio_basics juce::juce_audio_devices
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 endif()

@@ -33,11 +33,17 @@ AudioEngine::AudioEngine()
     {
         auto& bc = busConfigs[(size_t) b];
         bc.name = "Headphones " + juce::String (b + 1);
-        bc.routes[returnSource] = true; // everyone hears the vMix return by default
-        busGain[(size_t) b].store (1.0f);
+        bc.nameRight = "Headphones " + juce::String (b + 1) + " R";
+        bc.routes[0][returnSource] = bc.routes[1][returnSource] = true; // everyone hears the vMix return
+        busStereo[(size_t) b].store (true);
+    }
+
+    for (int o = 0; o < maxBuses * 2; ++o)
+    {
+        outGain[(size_t) o].store (1.0f);
 
         for (auto& r : routes)
-            r[(size_t) b].store (false);
+            r[(size_t) o].store (false);
     }
 
     outputIndexForChannel.fill (-1);
@@ -181,6 +187,19 @@ juce::String AudioEngine::getBusChannelLabel (int bus) const
     return "Out " + juce::String (first);
 }
 
+juce::String AudioEngine::getOutputChannelLabel (int bus, int side) const
+{
+    return "Out " + juce::String (bus * 2 + side + 1);
+}
+
+bool AudioEngine::busHasSecondOutput (int bus) const
+{
+    if (auto* d = interfaceManager.getCurrentAudioDevice())
+        return d->getActiveOutputChannels()[bus * 2 + 1];
+
+    return true;
+}
+
 juce::String AudioEngine::getInterfaceSummary() const
 {
     if (auto* d = interfaceManager.getCurrentAudioDevice())
@@ -312,10 +331,17 @@ void AudioEngine::applySourceConfig (int s)
 void AudioEngine::applyBusConfig (int b)
 {
     auto& bc = busConfigs[(size_t) b];
-    busGain[(size_t) b].store (dbToGain (bc.gainDb));
+    const auto left = (size_t) (b * 2), right = (size_t) (b * 2 + 1);
+
+    busStereo[(size_t) b].store (bc.stereo);
+    outGain[left].store (dbToGain (bc.gainDb));
+    outGain[right].store (dbToGain (bc.stereo ? bc.gainDb : bc.gainDbRight));
 
     for (int s = 0; s < numSources; ++s)
-        routes[(size_t) s][(size_t) b].store (bc.routes[s]);
+    {
+        routes[(size_t) s][left].store (bc.routes[0][s]);
+        routes[(size_t) s][right].store (bc.routes[1][s]);
+    }
 }
 
 void AudioEngine::setReturnSource (const juce::String& fullNdiName)
@@ -364,7 +390,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     numBuses = juce::jlimit (0, maxBuses, (outs.getHighestBit() + 2) / 2);
 
     inputScratch.setSize (maxInputs, chunkSize);
-    mixScratch.setSize (6, chunkSize);
+    mixScratch.setSize (7, chunkSize);
 
     returnFifo.setConsumerSampleRate (sampleRate);
     computerFifo.setConsumerSampleRate (sampleRate);
@@ -419,66 +445,53 @@ void AudioEngine::processChunk (const float* const* in, int numIn, float* const*
     if (haveComputer)
         computerFifo.pull (compL, compR, n);
 
-    // 4. Headphone matrix -> output pairs
-    float* busL = mixScratch.getWritePointer (4);
-    float* busR = mixScratch.getWritePointer (5);
+    // 4. Mono folds of the stereo sources, for outputs used as separate mono mixes.
+    float* retMono = mixScratch.getWritePointer (5);
+    float* compMono = mixScratch.getWritePointer (6);
+    juce::FloatVectorOperations::add (retMono, retL, retR, n);
+    juce::FloatVectorOperations::multiply (retMono, 0.5f, n);
+    if (haveComputer)
+    {
+        juce::FloatVectorOperations::add (compMono, compL, compR, n);
+        juce::FloatVectorOperations::multiply (compMono, 0.5f, n);
+    }
+
+    // 5. Headphone matrix: every output channel is mixed on its own, so each
+    //    source can go to the left and right side (or two mono mixes) separately.
+    float* mix = mixScratch.getWritePointer (4);
 
     for (int b = 0; b < numBuses.load(); ++b)
     {
-        const int chL = b * 2, chR = b * 2 + 1;
-        const int idxL = outputIndexForChannel[(size_t) chL];
-        const int idxR = chR < maxDeviceChannels ? outputIndexForChannel[(size_t) chR] : -1;
+        const int rightCh = b * 2 + 1;
+        const bool hasRight = rightCh < maxDeviceChannels && outputIndexForChannel[(size_t) rightCh] >= 0;
+        const bool stereo = hasRight && busStereo[(size_t) b].load (std::memory_order_relaxed);
 
-        float* outL = (idxL >= 0 && idxL < numOut) ? out[idxL] : nullptr;
-        float* outR = (idxR >= 0 && idxR < numOut) ? out[idxR] : nullptr;
-
-        if (outL == nullptr && outR == nullptr)
-            continue;
-
-        juce::FloatVectorOperations::clear (busL, n);
-        juce::FloatVectorOperations::clear (busR, n);
-
-        for (int s = 0; s < maxInputs; ++s)
+        for (int side = 0; side < 2; ++side)
         {
-            if (inputPresent[(size_t) s] && routes[(size_t) s][(size_t) b].load (std::memory_order_relaxed))
-            {
-                const float* src = inputScratch.getReadPointer (s);
-                juce::FloatVectorOperations::add (busL, src, n);
-                juce::FloatVectorOperations::add (busR, src, n);
-            }
-        }
+            const int ch = b * 2 + side;
+            if (ch >= maxDeviceChannels)
+                break;
 
-        if (haveComputer && routes[(size_t) computerSource][(size_t) b].load (std::memory_order_relaxed))
-        {
-            juce::FloatVectorOperations::add (busL, compL, n);
-            juce::FloatVectorOperations::add (busR, compR, n);
-        }
+            const int idx = outputIndexForChannel[(size_t) ch];
+            if (idx < 0 || idx >= numOut || out[idx] == nullptr)
+                continue;
 
-        if (routes[(size_t) returnSource][(size_t) b].load (std::memory_order_relaxed))
-        {
-            juce::FloatVectorOperations::add (busL, retL, n);
-            juce::FloatVectorOperations::add (busR, retR, n);
-        }
+            juce::FloatVectorOperations::clear (mix, n);
 
-        const float g = busGain[(size_t) b].load();
-        juce::FloatVectorOperations::multiply (busL, g, n);
-        juce::FloatVectorOperations::multiply (busR, g, n);
+            for (int s = 0; s < maxInputs; ++s)
+                if (inputPresent[(size_t) s] && routes[(size_t) s][(size_t) ch].load (std::memory_order_relaxed))
+                    juce::FloatVectorOperations::add (mix, inputScratch.getReadPointer (s), n);
 
-        busMeters[(size_t) (b * 2)].update (peakOf (busL, n));
-        busMeters[(size_t) (b * 2 + 1)].update (peakOf (busR, n));
+            // Stereo sources keep their own side in a stereo pair, and fold to mono otherwise.
+            if (haveComputer && routes[(size_t) computerSource][(size_t) ch].load (std::memory_order_relaxed))
+                juce::FloatVectorOperations::add (mix, stereo ? (side == 0 ? compL : compR) : compMono, n);
 
-        if (outL != nullptr && outR != nullptr)
-        {
-            juce::FloatVectorOperations::copy (outL + offset, busL, n);
-            juce::FloatVectorOperations::copy (outR + offset, busR, n);
-        }
-        else
-        {
-            // Odd output count: last bus is mono.
-            float* mono = outL != nullptr ? outL : outR;
-            juce::FloatVectorOperations::copy (mono + offset, busL, n);
-            juce::FloatVectorOperations::add (mono + offset, busR, n);
-            juce::FloatVectorOperations::multiply (mono + offset, 0.5f, n);
+            if (routes[(size_t) returnSource][(size_t) ch].load (std::memory_order_relaxed))
+                juce::FloatVectorOperations::add (mix, stereo ? (side == 0 ? retL : retR) : retMono, n);
+
+            juce::FloatVectorOperations::multiply (mix, outGain[(size_t) ch].load(), n);
+            busMeters[(size_t) ch].update (peakOf (mix, n));
+            juce::FloatVectorOperations::copy (out[idx] + offset, mix, n);
         }
     }
 }

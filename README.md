@@ -17,8 +17,9 @@ Runs on **macOS** (11+, Apple Silicon and Intel) and **Windows** (10/11, x64).
  Computer audio ─┼──────────────► NDI source  "Computer Audio" ───────────────────► vMix
  (virtual output)│
                  ▼
- vMix NDI out ──► HEADPHONE MATRIX ──► TASCAM Out 1/2 (Phones 1), Out 3/4 (Phones 2)
-                  (toggle what each pair hears)
+ vMix NDI out ──► HEADPHONE MATRIX ──► TASCAM outputs: per channel, as stereo pairs
+                  (toggle what each        or as separate mono feeds
+                   output hears)
 ```
 
 ## What it does
@@ -28,7 +29,7 @@ Runs on **macOS** (11+, Apple Silicon and Intel) and **Windows** (10/11, x64).
 | **Send to vMix** | One row per interface input. **SEND** publishes it as its own NDI source, named whatever you type. Level, meter, **STEREO/MONO** (mic inputs go out dual-mono in stereo mode, which vMix handles best), and a **MUTE** cough button that silences the send to vMix without touching the headphones. The last row is the computer audio. |
 | **vMix return** | Pick any NDI source on the network (e.g. a vMix output). Only its audio is received. A small buffer absorbs network jitter, and the app continuously corrects clock drift between the vMix machine and the interface, so it never clicks or drifts out of sync. |
 | **Computer audio** | Pick the virtual device your computer plays into. It can be sent as its own NDI source and/or put into the headphone mixes. |
-| **Headphone mixes** | One column per output pair (Out 1/2, Out 3/4, ...). Click a cell to toggle whether that source is heard in that pair. Each mix has its own level and meter and can be renamed (e.g. "Announcer 1 Phones"). |
+| **Headphone mixes** | Each output pair (Out 1/2, Out 3/4, ...) is either **STEREO** (one mix, one name and level) or **2× MONO** (each output is its own mix with its own name, level and meter, e.g. two separate headphone feeds). Every cell routes a source to one output channel, so left and right are always set separately: put a mic in one ear only, or build a split feed. Stereo sources (vMix return, computer audio) keep their L/R in a stereo pair and fold to mono in 2× mono. Shift-click a cell to set both sides at once. |
 
 Everything you change is saved automatically and restored the next time you open the app.
 
