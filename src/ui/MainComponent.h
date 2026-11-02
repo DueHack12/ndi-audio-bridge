@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CompanionPage.h"
 #include "Pages.h"
 #include "RoutingPage.h"
 #include "Sidebar.h"
@@ -9,7 +10,7 @@ class MainComponent : public juce::Component,
                       private juce::Timer
 {
 public:
-    MainComponent (AudioEngine&, ui::LookAndFeel&);
+    MainComponent (AudioEngine&, RemoteControl&, ui::LookAndFeel&);
     ~MainComponent() override;
 
     void paint (juce::Graphics&) override;
@@ -27,12 +28,14 @@ private:
     void updateResources();
 
     AudioEngine& engine;
+    RemoteControl& remote;
     ui::LookAndFeel& lookAndFeel;
     juce::TooltipWindow tooltipWindow { this, 600 };
 
     ui::Sidebar sidebar;
     ui::RoutingPage routingPage;
     ui::InterfacesPage interfacesPage;
+    ui::CompanionPage companionPage;
     ui::SettingsPage settingsPage;
     ui::Sidebar::Page page = ui::Sidebar::Page::routing;
 

@@ -1,4 +1,5 @@
 #include "engine/AudioEngine.h"
+#include "engine/RemoteControl.h"
 #include "engine/Settings.h"
 #include "ui/MainComponent.h"
 
@@ -25,7 +26,10 @@ public:
         if (auto computer = Settings::getSavedComputerDevice(); computer.isNotEmpty())
             engine->openComputerAudioDevice (computer);
 
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *lookAndFeel);
+        remote = std::make_unique<RemoteControl> (*engine);
+        Settings::restore (*remote);
+
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *remote, *lookAndFeel);
     }
 
     void shutdown() override
@@ -34,6 +38,7 @@ public:
             mainWindow->content->saveNow();
 
         mainWindow.reset();
+        remote.reset();
         engine.reset(); // stops audio, NDI threads, then unloads NDI
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
         lookAndFeel.reset();
@@ -44,11 +49,11 @@ public:
 private:
     struct MainWindow : public juce::DocumentWindow
     {
-        MainWindow (const juce::String& name, AudioEngine& audioEngine, ui::LookAndFeel& laf)
+        MainWindow (const juce::String& name, AudioEngine& audioEngine, RemoteControl& remoteControl, ui::LookAndFeel& laf)
             : DocumentWindow (name, ui::pal().bg, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            content = new MainComponent (audioEngine, laf);
+            content = new MainComponent (audioEngine, remoteControl, laf);
             setContentOwned (content, true);
             setResizable (true, true);
             setResizeLimits (1100, 700, 3000, 2000);
@@ -66,6 +71,7 @@ private:
 
     std::unique_ptr<ui::LookAndFeel> lookAndFeel;
     std::unique_ptr<AudioEngine> engine;
+    std::unique_ptr<RemoteControl> remote;
     std::unique_ptr<MainWindow> mainWindow;
 };
 

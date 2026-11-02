@@ -39,6 +39,7 @@ private:
         juce::String name, tag;
         juce::Rectangle<float> box;
         float level = -60.0f;
+        bool cough = false;
     };
 
     struct Mix

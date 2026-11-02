@@ -16,7 +16,7 @@ void FlatButton::paintButton (juce::Graphics& g, bool isHighlighted, bool isDown
     {
         case Kind::normal:  break;
         case Kind::toggle:  if (on) { fill = accent; border = accent; textColour = juce::Colours::white; } else { textColour = p.dim; } break;
-        case Kind::danger:  if (on) { fill = p.danger; border = p.danger; textColour = juce::Colours::white; } else { border = p.dangerBorder; textColour = p.danger; } break;
+        case Kind::danger:  if (on) { fill = p.danger; border = p.danger; textColour = onDanger(); } else { border = p.dangerBorder; textColour = p.danger; } break;
         case Kind::ghost:   fill = juce::Colours::transparentBlack; border = p.faint; textColour = p.dim; break;
         case Kind::primary: fill = accent; border = accent; textColour = juce::Colours::white; break;
     }

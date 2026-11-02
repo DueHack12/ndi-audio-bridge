@@ -15,6 +15,7 @@ void PatchView::rebuild (const std::vector<int>& sources, const std::vector<MixR
         item.order = order++;
         item.name = engine.getSourceConfig (s).name;
         item.tag = RoutingModel::sourceTag (s);
+        item.cough = engine.getSourceConfig (s).sendMuted;
         srcs.push_back (item);
     }
 
@@ -50,6 +51,13 @@ void PatchView::updateLevels (const Levels& levels)
 {
     for (auto& s : srcs)
     {
+        // cough can also change from Companion
+        if (const bool cough = engine.getSourceConfig (s.source).sendMuted; cough != s.cough)
+        {
+            s.cough = cough;
+            repaint (s.box.expanded (6.0f).toNearestInt());
+        }
+
         const float db = juce::Decibels::gainToDecibels (levels.source[(size_t) s.source], -60.0f);
         const float next = db > s.level ? db : juce::jmax (db, s.level - 1.8f);
         if (std::abs (next - s.level) > 0.05f)
@@ -251,9 +259,23 @@ void PatchView::paint (juce::Graphics& g)
         g.fillRoundedRectangle (meter.withWidth (meter.getWidth() * frac), 2.0f);
         inner.removeFromRight (8.0f);
 
-        g.setFont (font (11.0f));
-        g.setColour (p.dim);
-        g.drawText (s.tag, inner.removeFromRight (30.0f), juce::Justification::centredRight, false);
+        if (s.cough)
+        {
+            const auto badge = inner.removeFromRight (52.0f).withSizeKeepingCentre (52.0f, 18.0f);
+            g.setColour (p.danger);
+            g.fillRoundedRectangle (badge, 9.0f);
+            g.setColour (onDanger());
+            g.setFont (font (10.0f, true));
+            g.drawText ("COUGH", badge, juce::Justification::centred, false);
+            inner.removeFromRight (6.0f);
+        }
+
+        if (! s.cough || inner.getWidth() > 110.0f)
+        {
+            g.setFont (font (11.0f));
+            g.setColour (p.dim);
+            g.drawText (s.tag, inner.removeFromRight (30.0f), juce::Justification::centredRight, false);
+        }
 
         g.setFont (font (13.0f, true));
         g.setColour (p.text);

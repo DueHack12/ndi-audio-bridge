@@ -133,6 +133,8 @@ public:
         {
             auto& slot = engine.getSendHub().getSlot (source);
             const auto& cfg = engine.getSourceConfig (source);
+            if (coughButton.getToggleState() != cfg.sendMuted) // changed from Companion
+                coughButton.setToggleState (cfg.sendMuted, juce::dontSendNotification);
             if (! ndi::lib().isLoaded())                   { text = "NDI runtime not installed"; c = pal().danger; }
             else if (! cfg.sendEnabled)                    { text = "Not sent to vMix"; }
             else if (cfg.sendMuted)                        { text = "Muted to vMix (cough)"; c = pal().danger; }

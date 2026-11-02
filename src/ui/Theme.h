@@ -25,8 +25,11 @@ juce::Colour sourceColour (int orderIndex);
 
 juce::String formatDb (float db);
 
+/** Text colour on a filled danger (red) background, readable in both themes. */
+inline juce::Colour onDanger() { return isDark() ? pal().bg : juce::Colours::white; }
+
 /** Draws a path icon (24x24 design units, stroked) into an area. */
-enum class Icon { routing, interfaces, settings, sun, moon, close, plus, headphones, device };
+enum class Icon { routing, interfaces, settings, companion, sun, moon, close, plus, headphones, device };
 void drawIcon (juce::Graphics&, Icon, juce::Rectangle<float> area, juce::Colour, float strokeWidth = 2.0f);
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area);
 

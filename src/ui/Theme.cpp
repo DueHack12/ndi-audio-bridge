@@ -93,6 +93,12 @@ void drawIcon (juce::Graphics& g, Icon icon, juce::Rectangle<float> area, juce::
                 p.lineTo (12 + 9.5f * std::cos (a), 12 + 9.5f * std::sin (a));
             }
             break;
+        case Icon::companion: // a 2x2 button deck
+            p.addRoundedRectangle (3.0f, 3.0f, 7.5f, 7.5f, 2.0f);
+            p.addRoundedRectangle (13.5f, 3.0f, 7.5f, 7.5f, 2.0f);
+            p.addRoundedRectangle (3.0f, 13.5f, 7.5f, 7.5f, 2.0f);
+            p.addRoundedRectangle (13.5f, 13.5f, 7.5f, 7.5f, 2.0f);
+            break;
         case Icon::sun:
             p.addEllipse (8, 8, 8, 8);
             for (int i = 0; i < 8; ++i)

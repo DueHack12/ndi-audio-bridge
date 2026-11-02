@@ -16,7 +16,7 @@ struct ResourceInfo
 class Sidebar : public juce::Component
 {
 public:
-    enum class Page { routing, interfaces, settings };
+    enum class Page { routing, interfaces, companion, settings };
 
     static constexpr int collapsedWidth = 64, expandedWidth = 236, shadowWidth = 18;
 

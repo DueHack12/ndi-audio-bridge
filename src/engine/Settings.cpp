@@ -1,5 +1,6 @@
 #include "Settings.h"
 #include "AudioEngine.h"
+#include "RemoteControl.h"
 
 using namespace bridge;
 
@@ -250,6 +251,25 @@ void save (AudioEngine& engine)
     auto& file = getFile();
     file.setValue ("bridge", &xml);
     file.removeValue ("interface"); // v0.2's single-interface state is now part of "bridge"
+    file.saveIfNeeded();
+}
+void restore (RemoteControl& remote)
+{
+    auto& file = getFile();
+    RemoteControl::Config c;
+    c.enabled = file.getBoolValue ("oscEnabled", c.enabled);
+    c.port = file.getIntValue ("oscPort", c.port);
+    c.feedbackTo = file.getValue ("oscFeedbackTo", c.feedbackTo);
+    remote.setConfig (c);
+}
+
+void save (RemoteControl& remote)
+{
+    auto& file = getFile();
+    const auto& c = remote.getConfig();
+    file.setValue ("oscEnabled", c.enabled);
+    file.setValue ("oscPort", c.port);
+    file.setValue ("oscFeedbackTo", c.feedbackTo);
     file.saveIfNeeded();
 }
 } // namespace Settings

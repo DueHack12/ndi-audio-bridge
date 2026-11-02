@@ -1,3 +1,10 @@
+## What's new in 0.4.0
+
+- **Bitfocus Companion control.** Cough-mute any mic from a Stream Deck button (on, off, toggle, or press-to-cough), with feedback that lights the button only while that mic is really going to vMix: NDI send on, cough off, interface running and vMix connected. Uses Companion's built-in **Generic: OSC** connection on UDP port 9500.
+- **New Companion page** in the sidebar: connection settings, this computer's IP, the last command received, step-by-step Companion setup, and every mic's OSC paths with copy buttons and a live status.
+- Coughed sources now show a red **COUGH** tag in the Routing view, and the source pop-out follows cough changes made from Companion.
+- Better contrast for red buttons in dark mode.
+
 ## What's new in 0.3.1
 
 - Fixed the interface chips overlapping the **Add interface** button in the Routing header (seen on macOS with longer NDI version text).

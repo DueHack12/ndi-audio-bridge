@@ -3,11 +3,14 @@
 //      must produce a clean, continuous tone with no dropouts.
 //   2. Headphone matrix: per-side routing in STEREO and 2x MONO pairs, driving
 //      the real AudioEngine callback with a fake 4-in / 4-out interface.
-//   3. NDI loopback (only if an NDI runtime is installed): send a tone through
+//   3. Companion OSC control: real UDP packets on localhost mute/unmute a mic,
+//      and the on-air/cough feedback comes back to the sender.
+//   4. NDI loopback (only if an NDI runtime is installed): send a tone through
 //      NdiSendHub, receive it with NdiReceiver, and check it arrives intact.
 
 #include "dsp/DriftFifo.h"
 #include "engine/AudioEngine.h"
+#include "engine/RemoteControl.h"
 #include "ndi/NdiFinder.h"
 #include "ndi/NdiLibrary.h"
 #include "ndi/NdiReceiver.h"
@@ -16,6 +19,8 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <map>
 #include <random>
 #include <thread>
 #include <vector>
@@ -300,6 +305,139 @@ void routingMatrix()
     cb1.audioDeviceStopped();
 }
 
+juce::MemoryBlock oscNoArgs (const juce::String& address)
+{
+    juce::MemoryOutputStream o;
+    const auto n = std::strlen (address.toRawUTF8());
+    o.write (address.toRawUTF8(), n);
+    for (size_t pad = 4 - (n % 4); pad > 0; --pad)
+        o.writeByte (0);
+    o.write (",\0\0\0", 4);
+    return o.getMemoryBlock();
+}
+
+void companionControl()
+{
+    std::printf ("Companion OSC control\n");
+
+    // ---- codec
+    {
+        std::vector<RemoteControl::Message> m;
+        const auto pkt = RemoteControl::encode ("/bridge/in/1/2/live", 1);
+        check (pkt.getSize() == 28 && RemoteControl::parse (pkt.getData(), pkt.getSize(), m) && m.size() == 1
+                   && m[0].address == "/bridge/in/1/2/live" && m[0].args.size() == 1 && m[0].args[0].type == 'i' && m[0].args[0].i == 1,
+               "OSC integer message round-trips");
+
+        juce::MemoryOutputStream b;
+        b.write ("#bundle\0", 8);
+        b.writeInt64BigEndian (1);
+        const auto text = RemoteControl::encode ("/bridge/x", juce::String ("Host 1"));
+        b.writeIntBigEndian ((int) text.getSize());
+        b << text;
+        const juce::uint8 floatMsg[] = { '/', 'f', 0, 0, ',', 'f', 0, 0, 0x3f, 0x00, 0x00, 0x00 }; // 0.5
+        b.writeIntBigEndian ((int) sizeof (floatMsg));
+        b.write (floatMsg, sizeof (floatMsg));
+
+        m.clear();
+        check (RemoteControl::parse (b.getData(), b.getDataSize(), m) && m.size() == 2 && m[0].args.size() == 1 && m[0].args[0].s == "Host 1"
+                   && m[1].args.size() == 1 && m[1].args[0].type == 'f' && std::abs (m[1].args[0].f - 0.5) < 1.0e-9,
+               "OSC bundle with a string and a float parses");
+
+        m.clear();
+        check (! RemoteControl::parse ("hello", 5, m) && m.empty(), "non-OSC data is ignored");
+    }
+
+    // ---- end to end over UDP on localhost
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    AudioEngine engine;
+    bridge::InterfaceConfig cfg;
+    cfg.typeName = "Test";
+    cfg.inputName = cfg.outputName = "Fake TASCAM";
+    engine.setInterfaceConfig (0, cfg);
+    FakeInterface tascam ("Fake TASCAM", 4, 4);
+    engine.getInterfaceCallback (0).audioDeviceAboutToStart (&tascam);
+
+    RemoteControl remote (engine);
+    int port = 0;
+    for (int p = 39500; p < 39600 && ! remote.isListening(); ++p)
+    {
+        port = p;
+        remote.setConfig ({ true, p, {} });
+    }
+    check (remote.isListening(), "listening on UDP " + juce::String (port));
+
+    juce::DatagramSocket companion;          // plays Companion's "Generic: OSC" connection
+    companion.bindToPort (0);
+    const int companionPort = companion.getBoundPort();
+
+    std::map<juce::String, RemoteControl::Arg> feedback;
+    auto pump = [&] (std::function<bool()> done)
+    {
+        for (int i = 0; i < 300 && ! done(); ++i)
+        {
+            remote.process();
+            juce::Thread::sleep (5);
+            char buf[2048];
+            while (companion.waitUntilReady (true, 0) == 1)
+            {
+                juce::String ip;
+                int fromPort = 0;
+                const int n = companion.read (buf, (int) sizeof (buf), false, ip, fromPort);
+                std::vector<RemoteControl::Message> msgs;
+                if (n > 0 && RemoteControl::parse (buf, (size_t) n, msgs))
+                    for (auto& msg : msgs)
+                        if (! msg.args.empty())
+                            feedback[msg.address] = msg.args.front();
+            }
+        }
+        return done();
+    };
+    auto send = [&] (const juce::MemoryBlock& pkt) { companion.write ("127.0.0.1", port, pkt.getData(), (int) pkt.getSize()); };
+    auto fbInt = [&] (const juce::String& a) { auto it = feedback.find (a); return it == feedback.end() ? -1 : (int) it->second.i; };
+
+    const int in1 = bridge::sourceIndex (0, 0), in2 = bridge::sourceIndex (0, 1);
+    auto muted = [&] (int s) { return engine.getSourceConfig (s).sendMuted; };
+
+    send (oscNoArgs ("/bridge/in/1/2/cough/on"));
+    check (pump ([&] { return muted (in2) && fbInt ("/bridge/in/1/2/cough") == 1; }),
+           "cough/on mutes Input 2 and Companion gets cough = 1 back");
+    check (engine.getSendHub().getSlot (in2).muted.load() && ! muted (in1), "only Input 2's NDI send is muted");
+    check (fbInt ("/bridge/in/1/2/live") == 0, "Input 2 reports live = 0");
+    check (pump ([&] { return feedback.count ("/bridge/in/1/1/name") > 0; })
+               && feedback["/bridge/in/1/1/name"].s == engine.getSourceConfig (in1).name,
+           "every mic's name is sent (\"" + feedback["/bridge/in/1/1/name"].s + "\")");
+    check (remote.getConfig().feedbackTo == "127.0.0.1:" + juce::String (companionPort) && remote.takeConfigChanged(),
+           "feedback address learned from the first command (" + remote.getConfig().feedbackTo + ")");
+
+    send (oscNoArgs ("/bridge/in/1/2/cough/toggle"));
+    check (pump ([&] { return ! muted (in2) && fbInt ("/bridge/in/1/2/cough") == 0; }), "cough/toggle unmutes it again");
+
+    send (RemoteControl::encode ("/bridge/in/1/1/cough", 1));
+    check (pump ([&] { return muted (in1) && fbInt ("/bridge/in/1/1/cough") == 1; }), "/cough with integer 1 mutes Input 1");
+    send (RemoteControl::encode ("/bridge/in/1/1/cough", 0));
+    check (pump ([&] { return ! muted (in1); }), "/cough with integer 0 unmutes it");
+
+    send (oscNoArgs ("/bridge/computer/cough/on"));
+    check (pump ([&] { return muted (bridge::computerSource) && fbInt ("/bridge/computer/cough") == 1; }), "computer audio cough works too");
+
+    send (oscNoArgs ("/bridge/in/1/9/cough/on"));   // the fake interface has 4 inputs
+    send (oscNoArgs ("/bridge/in/3/1/cough/on"));   // no third interface
+    send (oscNoArgs ("/something/else"));
+    pump ([] { return false; });
+    bool anyMuted = false;
+    for (int ch = 0; ch < bridge::maxInsPerInterface; ++ch)
+        anyMuted = anyMuted || muted (bridge::sourceIndex (0, ch)) || muted (bridge::sourceIndex (2, ch));
+    check (! anyMuted, "paths for missing inputs are ignored");
+
+    feedback.clear();
+    send (oscNoArgs ("/bridge/refresh"));
+    check (pump ([&] { return fbInt ("/bridge/in/1/4/receivers") == 0 && fbInt ("/bridge/in/1/3/live") == 0; }),
+           "/bridge/refresh sends everything again");
+
+    remote.setConfig ({ false, port, remote.getConfig().feedbackTo });
+    check (! remote.isListening(), "turning it off closes the port");
+}
+
 void ndiLoopback()
 {
     std::printf ("NDI loopback\n");
@@ -412,6 +550,7 @@ int main()
     driftScenario ("48 kHz NDI into 44.1 kHz interface", 48000.0, 50e-6, 44100.0, 1600, 256, 60.0, 8.0);
 
     routingMatrix();
+    companionControl();
     ndiLoopback();
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");

@@ -3,6 +3,7 @@
 #include <juce_data_structures/juce_data_structures.h>
 
 class AudioEngine;
+class RemoteControl;
 
 /** Saves/restores everything to a settings file:
       macOS:   ~/Library/Application Support/NDI Audio Bridge/NDI Audio Bridge.settings
@@ -21,6 +22,10 @@ void restore (AudioEngine&);
 
 juce::String getSavedComputerDevice();
 void save (AudioEngine&);
+
+/** Companion / OSC control: on/off, port and feedback address. */
+void restore (RemoteControl&);
+void save (RemoteControl&);
 
 bool isDarkTheme();
 void setDarkTheme (bool dark);

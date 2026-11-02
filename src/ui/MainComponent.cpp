@@ -1,11 +1,13 @@
 #include "MainComponent.h"
+#include "engine/RemoteControl.h"
 #include "engine/Settings.h"
 
-MainComponent::MainComponent (AudioEngine& e, ui::LookAndFeel& laf)
-    : engine (e), lookAndFeel (laf), routingPage (e), interfacesPage (e), settingsPage (e)
+MainComponent::MainComponent (AudioEngine& e, RemoteControl& r, ui::LookAndFeel& laf)
+    : engine (e), remote (r), lookAndFeel (laf), routingPage (e), interfacesPage (e), companionPage (e, r), settingsPage (e)
 {
     addAndMakeVisible (routingPage);
     addChildComponent (interfacesPage);
+    addChildComponent (companionPage);
     addChildComponent (settingsPage);
     addAndMakeVisible (sidebar);
 
@@ -20,6 +22,8 @@ MainComponent::MainComponent (AudioEngine& e, ui::LookAndFeel& laf)
         interfacesPage.addInterface();
     };
     interfacesPage.onChanged = [this] { markDirty(); rebuildAll(); };
+    companionPage.onChanged = [this] { markDirty(); };
+    companionPage.onSourceChanged = [this] { markDirty(); };
     settingsPage.onThemeChosen = [this] (bool dark) { setTheme (dark); };
     settingsPage.onChanged = [this] { markDirty(); };
 
@@ -36,6 +40,7 @@ MainComponent::~MainComponent()
 void MainComponent::saveNow()
 {
     Settings::save (engine);
+    Settings::save (remote);
     dirty = false;
 }
 
@@ -50,6 +55,7 @@ void MainComponent::rebuildAll()
     lastStructure = engine.getStructureVersion();
     routingPage.rebuild();
     interfacesPage.rebuild();
+    companionPage.rebuild();
     settingsPage.refresh();
 }
 
@@ -59,9 +65,12 @@ void MainComponent::showPage (ui::Sidebar::Page p)
     sidebar.setPage (p);
     routingPage.setVisible (p == ui::Sidebar::Page::routing);
     interfacesPage.setVisible (p == ui::Sidebar::Page::interfaces);
+    companionPage.setVisible (p == ui::Sidebar::Page::companion);
     settingsPage.setVisible (p == ui::Sidebar::Page::settings);
     if (p == ui::Sidebar::Page::interfaces)
         interfacesPage.rebuild();
+    if (p == ui::Sidebar::Page::companion)
+        companionPage.refresh();
     if (p == ui::Sidebar::Page::settings)
         settingsPage.refresh();
 }
@@ -117,11 +126,22 @@ void MainComponent::timerCallback()
     if (engine.getStructureVersion() != lastStructure)
         rebuildAll();
 
+    // Companion: apply received cough commands, send on-air feedback. The pages pick up changes on their next tick.
+    if (remote.process())
+        markDirty();
+    if (remote.takeConfigChanged())
+    {
+        companionPage.refresh();
+        markDirty();
+    }
+
     levels.read (engine);
     if (page == ui::Sidebar::Page::routing)
         routingPage.tick (levels);
     else if (page == ui::Sidebar::Page::interfaces)
         interfacesPage.tick();
+    else if (page == ui::Sidebar::Page::companion)
+        companionPage.tick();
 
     if (now - lastSecondMs >= 1000)
     {
@@ -157,5 +177,6 @@ void MainComponent::resized()
     r.removeFromLeft (ui::Sidebar::collapsedWidth);
     routingPage.setBounds (r);
     interfacesPage.setBounds (r);
+    companionPage.setBounds (r);
     settingsPage.setBounds (r);
 }

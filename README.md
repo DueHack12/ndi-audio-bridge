@@ -30,6 +30,7 @@ Runs on **macOS** (11+, Apple Silicon and Intel) and **Windows** (10/11, x64).
 | **Routing: mixer** | One tab per headphone mix. Each source gets a strip: **ON**, **L / R** (for stereo mixes, so a mic can go in one ear only), a fader for its level in this mix, and a meter. The master strip names the mix and sets its overall level. **STEREO / 2× MONO** turns an output pair into one stereo mix or two separate mono feeds. |
 | **Source pop-out** | Click any source. Rename it (that's its NDI name in vMix), switch its NDI send on/off, stereo/mono send, **cough mute** (silences the send to vMix, not the headphones), trim, and every mix it feeds with its own level. For **Computer Audio** pick the virtual device; for **vMix Return** pick the NDI source and its buffer. |
 | **Interfaces** | Add up to four audio interfaces, each with its own driver, sample rate and buffer. **Inputs used / outputs used** hides channels you don't need. |
+| **Companion** | Cough mute from **Bitfocus Companion** (Stream Deck), with an on-air light on the button. Lists the OSC path for every mic, with copy buttons. See [Bitfocus Companion](#bitfocus-companion). |
 | **Settings** | Light or dark mode, the buffers, NDI runtime info. |
 | **Sidebar** | Hover it to expand. At the bottom: CPU (this app vs. the whole computer, and how much is free) and network (what NDI is sending/receiving and how much of the link is free). |
 
@@ -102,6 +103,47 @@ NDI / SRT*) and set that output's audio to the mix the announcers should hear. T
 > vMix. Point the return at a vMix bus (e.g. Bus A) that carries program audio *without* the
 > announcer mics, and let the headphone mixes handle hearing themselves and each other.
 
+## Bitfocus Companion
+
+The app listens for OSC on **UDP port 9500**, so Companion buttons can cough-mute a mic and
+light up only while that mic is actually reaching vMix. The **Companion** page in the app shows
+this computer's IP, the last command received, and the paths for every mic, with copy buttons.
+
+**1. Add the connection.** In Companion, add **Generic: OSC**:
+
+| Field | Value |
+|---|---|
+| Target Hostname or IP | the IP of the computer running NDI Audio Bridge (`127.0.0.1` if it's the same computer) |
+| Target Port | `9500` |
+| Protocol | UDP |
+| Listen for Feedback | ticked |
+| Source Port | any free port, e.g. `9501` |
+
+The app sends feedback to whatever address a command comes from, and remembers the first one
+(in *Send feedback to* on the Companion page), so the buttons are right again after a restart.
+
+**2. A cough button.** Press action **Send message without arguments**, OSC Path
+`/bridge/in/1/1/cough/toggle` (interface 1, input 1). For press-to-cough instead, use
+`…/cough/on` as the press action and `…/cough/off` as the release action.
+
+**3. The on-air light.** Feedback **Listen for OSC messages (Integer)**, OSC Path
+`/bridge/in/1/1/live`, Value `1`, with a red background. A second feedback on
+`/bridge/in/1/1/cough` = `1` can show the button differently (e.g. grey "COUGH") while muted.
+
+| Path | Direction | Meaning |
+|---|---|---|
+| `/bridge/in/<i>/<n>/cough/on` · `/off` · `/toggle` | to the app | Cough mute on, off, toggle. `<i>` = interface number, `<n>` = input number (the Companion page lists the exact path for every mic) |
+| `/bridge/in/<i>/<n>/cough` + integer | to the app | 1 = mute, 0 = unmute (without an argument it toggles) |
+| `/bridge/computer/cough/…` | to the app | The same for computer audio |
+| `/bridge/refresh` | to the app | Send every value again |
+| `/bridge/in/<i>/<n>/live` | from the app | **1** = going to vMix right now: NDI send on, cough off, interface running and vMix connected to it |
+| `/bridge/in/<i>/<n>/cough` | from the app | 1 = cough mute on |
+| `/bridge/in/<i>/<n>/receivers` | from the app | How many NDI receivers (e.g. vMix) have this source open |
+| `/bridge/in/<i>/<n>/name` | from the app | The mic's name (for button text via the *OSC message value* feedback) |
+
+Values are sent when they change and all of them every 5 seconds. The port can be changed (or
+OSC control turned off) on the Companion page.
+
 ---
 
 ## Latency
@@ -128,6 +170,9 @@ NDI / SRT*) and set that output's audio to the mix the announcers should hear. T
 | No input level at all on macOS | System Settings > Privacy & Security > Microphone: enable NDI Audio Bridge. |
 | Computer audio silent | System (or Windows) output must be set to the virtual device, and the same device picked under *Plays from* in the **Computer Audio** pop-out. |
 | Return crackles or drops out | Raise the return **Buffer**, use wired Ethernet rather than Wi-Fi. |
+| Companion buttons do nothing | On the **Companion** page, check *Last command*. Nothing there: wrong IP/port in Companion, or a firewall: allow NDI Audio Bridge on Private networks (Windows) or accept incoming connections (macOS). |
+| Companion buttons work but never light up | Tick **Listen for Feedback** and set a **Source Port** in the Companion connection, then press a button once. *Send feedback to* on the Companion page should show Companion's IP and that port. |
+| `live` stays 0 although the mic isn't coughed | `live` also needs vMix to have the source open (*receivers* ≥ 1) and the NDI send switched on. |
 
 ---
 
@@ -170,7 +215,8 @@ workflow creates the `v0.1.1` tag and release with both zips. Pushing a `v*` tag
 drifting network feed (±300 ppm, 25/30 fps frame sizes, 48 kHz → 44.1 kHz) and checks for
 zero dropouts, steady latency and a click-free signal. It also drives the real mixing engine with
 two fake interfaces to check per-side routing, per-source levels, mono folding and mixing
-across interfaces. If an NDI runtime is installed, it also
+across interfaces, and sends real OSC packets to the Companion control to check cough on/off/
+toggle and the feedback that comes back. If an NDI runtime is installed, it also
 sends a tone through a real NDI sender and receiver and checks it arrives intact.
 
 ### Code layout
@@ -179,6 +225,7 @@ sends a tone through a real NDI sender and receiver and checks it arrives intact
 src/engine/AudioEngine.*   interfaces, clock bridges between them, routing, NDI wiring
 src/engine/Settings.*      save/restore (and migration from 0.1/0.2)
 src/engine/SystemMonitor.* CPU and network numbers for the sidebar
+src/engine/RemoteControl.* OSC control for Bitfocus Companion (cough, on-air feedback)
 src/dsp/DriftFifo.h        clock-drift-correcting resampling FIFO
 src/dsp/StereoFifo.h       lock-free FIFO between audio callbacks and the NDI thread
 src/ndi/                   runtime NDI loader, sender hub, receiver, source finder

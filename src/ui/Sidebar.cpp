@@ -1,5 +1,7 @@
 #include "Sidebar.h"
 
+#include <iterator>
+
 namespace ui
 {
 namespace
@@ -8,8 +10,10 @@ struct NavItem { const char* label; Icon icon; Sidebar::Page page; };
 const NavItem navItems[] = {
     { "Routing", Icon::routing, Sidebar::Page::routing },
     { "Interfaces", Icon::interfaces, Sidebar::Page::interfaces },
+    { "Companion", Icon::companion, Sidebar::Page::companion },
     { "Settings", Icon::settings, Sidebar::Page::settings },
 };
+constexpr int numNavItems = (int) std::size (navItems);
 
 juce::String bitsText (double bps)
 {
@@ -103,7 +107,7 @@ void Sidebar::paint (juce::Graphics& g)
         g.drawText ("NDI Audio Bridge", juce::Rectangle<int> (58, 18, w - 64, 32), juce::Justification::centredLeft, false);
     }
 
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < numNavItems; ++i)
     {
         const auto r = navRect (i);
         const bool sel = navItems[i].page == page;
@@ -225,7 +229,7 @@ void Sidebar::paint (juce::Graphics& g)
 void Sidebar::mouseUp (const juce::MouseEvent& e)
 {
     const auto pos = e.getPosition();
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < numNavItems; ++i)
     {
         if (navRect (i).contains (pos))
         {
@@ -243,7 +247,7 @@ void Sidebar::mouseUp (const juce::MouseEvent& e)
 void Sidebar::mouseMove (const juce::MouseEvent& e)
 {
     bool clickable = themeRect().contains (e.getPosition());
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < numNavItems; ++i)
         clickable = clickable || navRect (i).contains (e.getPosition());
     setMouseCursor (clickable ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
 }
