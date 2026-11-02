@@ -219,6 +219,20 @@ void routingMatrix()
     check (near (out (2), 0.575f), "2x mono: Out 3 = In 2 + return folded to mono (" + juce::String (out (2), 4) + ")");
     check (near (out (3), 0.05f),  "2x mono: Out 4 = In 1 with its own -6 dB level (" + juce::String (out (3), 4) + ")");
 
+    // Per-source levels: In 1 at -6 dB on Out 1 only; return at -6 dB into Out 4's mix.
+    p1.levelsDb[0][0] = -6.0206f;
+    engine.applyBusConfig (0);
+    p2.routes[1][bridge::returnSource] = true;
+    p2.levelsDb[1][bridge::returnSource] = -6.0206f;
+    engine.applyBusConfig (1);
+    run();
+    check (near (out (0), 0.55f),   "per-source level: In 1 at -6 dB into Out 1 (" + juce::String (out (0), 4) + ")");
+    check (near (out (3), 0.14375f), "per-source level: return at -6 dB into Out 4, then Out 4 at -6 dB (" + juce::String (out (3), 4) + ")");
+    p1.levelsDb[0][0] = 0.0f;
+    p2.routes[1][bridge::returnSource] = false;
+    engine.applyBusConfig (0);
+    engine.applyBusConfig (1);
+
     // Same routes, pair 1 switched to 2x MONO: the return folds to mono on Out 2.
     p1.stereo = false;
     engine.applyBusConfig (0);

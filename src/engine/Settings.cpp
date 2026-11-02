@@ -77,6 +77,16 @@ void restoreConfig (AudioEngine& engine)
             return true;
         };
 
+        auto readLevels = [&] (const juce::String& attr, float* dest)
+        {
+            auto values = juce::StringArray::fromTokens (e->getStringAttribute (attr), ",", {});
+            if (values.size() == numSources)
+                for (int s = 0; s < numSources; ++s)
+                    dest[s] = values[s].getFloatValue();
+        };
+        readLevels ("levelsL", bc.levelsDb[0]);
+        readLevels ("levelsR", bc.levelsDb[1]);
+
         // v0.1.0 stored one route per pair ("routes"): apply it to both sides.
         if (! readRoutes ("routesL", bc.routes[0]) && readRoutes ("routes", bc.routes[0]))
             std::copy (std::begin (bc.routes[0]), std::end (bc.routes[0]), std::begin (bc.routes[1]));
@@ -127,6 +137,11 @@ void save (AudioEngine& engine)
             for (int s = 0; s < numSources; ++s)
                 routes << (bc.routes[side][s] ? "1" : "0");
             e->setAttribute (side == 0 ? "routesL" : "routesR", routes);
+
+            juce::StringArray levels;
+            for (int s = 0; s < numSources; ++s)
+                levels.add (juce::String (bc.levelsDb[side][s], 1));
+            e->setAttribute (side == 0 ? "levelsL" : "levelsR", levels.joinIntoString (","));
         }
     }
 

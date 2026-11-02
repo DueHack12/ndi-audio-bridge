@@ -50,6 +50,7 @@ struct BusConfig
     juce::String name, nameRight;          // nameRight: the second output's mix in dual-mono mode
     float gainDb = 0.0f, gainDbRight = 0.0f;
     bool routes[2][numSources] {};         // [0] = left / first output, [1] = right / second output
+    float levelsDb[2][numSources] {};      // per-source level into each output (0 dB default)
 };
 } // namespace bridge
 
@@ -173,7 +174,8 @@ private:
     std::array<std::atomic<float>, bridge::numSources> sourceGain;
     // Per output channel (bus * 2 + side)
     std::array<std::atomic<float>, bridge::maxBuses * 2> outGain;
-    std::array<std::array<std::atomic<bool>, bridge::maxBuses * 2>, bridge::numSources> routes;
+    // Linear gain of each source into each output channel; 0 = not routed.
+    std::array<std::array<std::atomic<float>, bridge::maxBuses * 2>, bridge::numSources> routeGain;
     std::array<std::atomic<bool>, bridge::maxBuses> busStereo;
 
     std::array<bridge::Meter, bridge::numSources> sourceMeters;

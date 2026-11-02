@@ -42,8 +42,8 @@ AudioEngine::AudioEngine()
     {
         outGain[(size_t) o].store (1.0f);
 
-        for (auto& r : routes)
-            r[(size_t) o].store (false);
+        for (auto& r : routeGain)
+            r[(size_t) o].store (0.0f);
     }
 
     outputIndexForChannel.fill (-1);
@@ -339,8 +339,8 @@ void AudioEngine::applyBusConfig (int b)
 
     for (int s = 0; s < numSources; ++s)
     {
-        routes[(size_t) s][left].store (bc.routes[0][s]);
-        routes[(size_t) s][right].store (bc.routes[1][s]);
+        routeGain[(size_t) s][left].store (bc.routes[0][s] ? dbToGain (bc.levelsDb[0][s]) : 0.0f);
+        routeGain[(size_t) s][right].store (bc.routes[1][s] ? dbToGain (bc.levelsDb[1][s]) : 0.0f);
     }
 }
 
@@ -478,16 +478,18 @@ void AudioEngine::processChunk (const float* const* in, int numIn, float* const*
 
             juce::FloatVectorOperations::clear (mix, n);
 
+            auto gainOf = [&] (int source) { return routeGain[(size_t) source][(size_t) ch].load (std::memory_order_relaxed); };
+
             for (int s = 0; s < maxInputs; ++s)
-                if (inputPresent[(size_t) s] && routes[(size_t) s][(size_t) ch].load (std::memory_order_relaxed))
-                    juce::FloatVectorOperations::add (mix, inputScratch.getReadPointer (s), n);
+                if (const float g = gainOf (s); inputPresent[(size_t) s] && g > 0.0f)
+                    juce::FloatVectorOperations::addWithMultiply (mix, inputScratch.getReadPointer (s), g, n);
 
             // Stereo sources keep their own side in a stereo pair, and fold to mono otherwise.
-            if (haveComputer && routes[(size_t) computerSource][(size_t) ch].load (std::memory_order_relaxed))
-                juce::FloatVectorOperations::add (mix, stereo ? (side == 0 ? compL : compR) : compMono, n);
+            if (const float g = gainOf (computerSource); haveComputer && g > 0.0f)
+                juce::FloatVectorOperations::addWithMultiply (mix, stereo ? (side == 0 ? compL : compR) : compMono, g, n);
 
-            if (routes[(size_t) returnSource][(size_t) ch].load (std::memory_order_relaxed))
-                juce::FloatVectorOperations::add (mix, stereo ? (side == 0 ? retL : retR) : retMono, n);
+            if (const float g = gainOf (returnSource); g > 0.0f)
+                juce::FloatVectorOperations::addWithMultiply (mix, stereo ? (side == 0 ? retL : retR) : retMono, g, n);
 
             juce::FloatVectorOperations::multiply (mix, outGain[(size_t) ch].load(), n);
             busMeters[(size_t) ch].update (peakOf (mix, n));
