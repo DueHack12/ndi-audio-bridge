@@ -26,6 +26,14 @@ private:
     void closeInspector();
     void routingChanged();
     void refreshNames();
+    void layoutHeader();
+
+    struct HeaderChip
+    {
+        juce::String text;
+        juce::Rectangle<int> bounds;
+        int kind = 0;   // 0 NDI ok, 1 NDI missing, 2 interface running, 3 interface down
+    };
 
     AudioEngine& engine;
     PatchView patch;
@@ -37,5 +45,7 @@ private:
     std::vector<MixRef> mixes;
     int selectedSource = -1, selectedMix = 0;
     juce::Rectangle<int> headerArea;
+    std::vector<HeaderChip> chips;
+    int hintLeft = 0;
 };
 } // namespace ui

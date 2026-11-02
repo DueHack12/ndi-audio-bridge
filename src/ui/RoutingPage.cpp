@@ -122,7 +122,60 @@ void RoutingPage::tick (const Levels& levels)
     mixer.updateLevels (levels);
     if (inspector.isVisible())
         inspector.tick (levels);
-    repaint (headerArea);
+
+    // Chip text ("2 live", interface up/down) can change: re-lay out the header when it does.
+    const auto previous = chips;
+    layoutHeader();
+    bool same = previous.size() == chips.size();
+    for (size_t i = 0; same && i < chips.size(); ++i)
+        same = previous[i].text == chips[i].text && previous[i].kind == chips[i].kind;
+    if (! same)
+        repaint (headerArea);
+}
+
+void RoutingPage::layoutHeader()
+{
+    chips.clear();
+
+    auto add = [this] (const juce::String& text, int kind)
+    {
+        const bool dot = kind >= 2;
+        const int w = (int) std::ceil (juce::GlyphArrangement::getStringWidth (font (12.5f, true), text)) + (dot ? 40 : 26);
+        chips.push_back ({ text, { 0, 0, w, 26 }, kind });
+    };
+
+    if (ndi::lib().isLoaded())
+    {
+        int live = 0;
+        for (auto s : sources)
+            if (s != bridge::returnSource && engine.getSendHub().getSlot (s).live.load())
+                ++live;
+        add ("NDI " + ndi::lib().getStatusText().fromLastOccurrenceOf (" ", false, false)
+               + juce::String::fromUTF8 (" \xc2\xb7 ") + juce::String (live) + " live", 0);
+    }
+    else
+    {
+        add ("NDI runtime not installed", 1);
+    }
+
+    for (int i = 0; i < bridge::maxInterfaces; ++i)
+        if (engine.isInterfaceUsed (i))
+            add (RoutingModel::shortDevice (engine, i), engine.isInterfaceRunning (i) ? 2 : 3);
+
+    int x = headerArea.getX() + 24 + 90 + 8;
+    for (auto& c : chips)
+    {
+        c.bounds.setPosition (x, headerArea.getCentreY() - 13);
+        x += c.bounds.getWidth() + 8;
+    }
+
+    bool canAdd = false;
+    for (int i = 0; i < bridge::maxInterfaces; ++i)
+        canAdd = canAdd || ! engine.isInterfaceUsed (i);
+
+    addInterfaceButton.setVisible (canAdd);
+    addInterfaceButton.setBounds (x, headerArea.getCentreY() - 13, 132, 26);
+    hintLeft = x + (canAdd ? 132 + 16 : 0);
 }
 
 void RoutingPage::paint (juce::Graphics& g)
@@ -137,54 +190,34 @@ void RoutingPage::paint (juce::Graphics& g)
     g.setColour (p.border2);
     g.drawHorizontalLine (headerArea.getBottom() - 1, 0.0f, (float) getWidth());
 
-    auto chip = [&] (const juce::String& text, juce::Colour bg, juce::Colour fg, juce::Colour dot, bool outline)
+    g.setFont (font (12.5f, true));
+    for (auto& c : chips)
     {
-        g.setFont (font (12.5f, true));
-        const int w = (int) juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), text) + (dot.isTransparent() ? 22 : 36);
-        auto r = h.removeFromLeft (w).withSizeKeepingCentre (w, 26).toFloat();
-        h.removeFromLeft (8);
+        auto r = c.bounds.toFloat();
+        const juce::Colour bg = c.kind == 0 ? p.okBg : (c.kind == 1 ? p.danger.withAlpha (0.12f) : p.panel);
+        const juce::Colour fg = c.kind == 0 ? p.okFg : (c.kind == 1 ? p.danger : p.text);
+
         g.setColour (bg);
         g.fillRoundedRectangle (r, 13.0f);
-        if (outline)
+        if (c.kind >= 2)
         {
             g.setColour (p.border);
             g.drawRoundedRectangle (r.reduced (0.5f), 13.0f, 1.0f);
-        }
-        if (! dot.isTransparent())
-        {
-            g.setColour (dot);
+            g.setColour (c.kind == 2 ? p.green : p.danger);
             g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre ({ r.getX() + 15.0f, r.getCentreY() }));
             r.removeFromLeft (14.0f);
         }
         g.setColour (fg);
-        g.drawText (text, r, juce::Justification::centred, false);
-    };
-
-    h.removeFromLeft (8);
-    if (ndi::lib().isLoaded())
-    {
-        int live = 0;
-        for (auto s : sources)
-            if (s != bridge::returnSource && engine.getSendHub().getSlot (s).live.load())
-                ++live;
-        chip ("NDI " + ndi::lib().getStatusText().fromLastOccurrenceOf (" ", false, false) + juce::String::fromUTF8 (" · ") + juce::String (live) + " live",
-              p.okBg, p.okFg, juce::Colours::transparentBlack, false);
-    }
-    else
-    {
-        chip ("NDI runtime not installed", p.danger.withAlpha (0.12f), p.danger, juce::Colours::transparentBlack, false);
+        g.drawText (c.text, r, juce::Justification::centred, false);
     }
 
-    for (int i = 0; i < bridge::maxInterfaces; ++i)
-        if (engine.isInterfaceUsed (i))
-            chip (RoutingModel::shortDevice (engine, i), p.panel, p.text, engine.isInterfaceRunning (i) ? p.green : p.danger, true);
-
-    if (! inspector.isVisible() && h.getWidth() > 300)
+    const auto hint = juce::String::fromUTF8 ("Drag from a source\xe2\x80\x99s dot onto a mix to add it");
+    g.setFont (font (12.5f));
+    if (! inspector.isVisible()
+        && headerArea.getRight() - 24 - hintLeft > (int) juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), hint) + 8)
     {
         g.setColour (p.dim);
-        g.setFont (font (12.5f));
-        g.drawText (juce::String::fromUTF8 ("Drag from a source\xe2\x80\x99s dot onto a mix to add it"),
-                    headerArea.reduced (24, 0), juce::Justification::centredRight, false);
+        g.drawText (hint, headerArea.reduced (24, 0), juce::Justification::centredRight, false);
     }
 }
 
@@ -195,16 +228,7 @@ void RoutingPage::resized()
         inspector.setBounds (r.removeFromRight (SourceInspector::panelWidth));
 
     headerArea = r.removeFromTop (56);
-
-    // Place the add button after the chips (approximate their width).
-    int x = headerArea.getX() + 24 + 90 + 8;
-    auto chipW = [] (const juce::String& t, bool dot) { return (int) juce::GlyphArrangement::getStringWidth (font (12.5f, true), t) + (dot ? 36 : 22) + 8; };
-    x += chipW (ndi::lib().isLoaded() ? juce::String::fromUTF8 ("NDI 6.3 · 00 live") : "NDI runtime not installed", false);
-    for (int i = 0; i < bridge::maxInterfaces; ++i)
-        if (engine.isInterfaceUsed (i))
-            x += chipW (RoutingModel::shortDevice (engine, i), true);
-    addInterfaceButton.setBounds (x, headerArea.getCentreY() - 13, 132, 26);
-    addInterfaceButton.setVisible ([this] { for (int i = 0; i < bridge::maxInterfaces; ++i) if (! engine.isInterfaceUsed (i)) return true; return false; }());
+    layoutHeader();
 
     const int patchH = juce::jmax (240, juce::roundToInt ((float) r.getHeight() * 0.48f));
     patch.setBounds (r.removeFromTop (patchH));

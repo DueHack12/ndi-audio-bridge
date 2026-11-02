@@ -1,3 +1,7 @@
+## What's new in 0.3.1
+
+- Fixed the interface chips overlapping the **Add interface** button in the Routing header (seen on macOS with longer NDI version text).
+
 ## What's new in 0.3.0
 
 - **New interface:** sources and headphone mixes connected by wires (drag a source onto a mix to add it), a channel-strip mixer for the selected mix, and a pop-out panel when you click a source.
