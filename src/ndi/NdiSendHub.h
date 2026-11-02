@@ -15,7 +15,7 @@
 class NdiSendHub : private juce::Thread
 {
 public:
-    static constexpr int maxSlots = 24;
+    static constexpr int maxSlots = 72;
 
     struct Slot
     {
@@ -58,6 +58,9 @@ public:
 
     Slot& getSlot (int index) noexcept { return slots[(size_t) index]; }
 
+    /** Estimated bytes put on the network so far: payload x receivers (for the network glance). */
+    juce::uint64 getBytesSent() const noexcept { return bytesSent.load(); }
+
     /** Message thread: set the NDI source name (the machine name is added by NDI). */
     void setName (int index, const juce::String& newName);
     juce::String getName (int index) const;
@@ -66,4 +69,5 @@ private:
     void run() override;
 
     std::array<Slot, maxSlots> slots;
+    std::atomic<juce::uint64> bytesSent { 0 };
 };

@@ -11,11 +11,21 @@
 
 namespace bridge
 {
-constexpr int maxInputs = 16;                 // interface inputs we handle
-constexpr int maxBuses = 8;                   // stereo output pairs (Out 1/2, Out 3/4, ...)
-constexpr int computerSource = maxInputs;     // matrix row / send slot for computer audio
-constexpr int returnSource = maxInputs + 1;   // matrix row for the NDI return
-constexpr int numSources = maxInputs + 2;
+constexpr int maxInterfaces = 4;
+constexpr int maxInsPerInterface = 16;
+constexpr int maxPairsPerInterface = 8;                                   // 16 outputs
+constexpr int computerSource = maxInterfaces * maxInsPerInterface;       // 64
+constexpr int returnSource = computerSource + 1;                         // 65
+constexpr int numSources = returnSource + 1;                             // 66
+constexpr int numBuses = maxInterfaces * maxPairsPerInterface;           // 32 output pairs
+constexpr int numOutChannels = numBuses * 2;                             // 64
+
+constexpr int sourceIndex (int iface, int ch) noexcept   { return iface * maxInsPerInterface + ch; }
+constexpr int interfaceOfSource (int s) noexcept         { return s < computerSource ? s / maxInsPerInterface : -1; }
+constexpr int channelOfSource (int s) noexcept           { return s % maxInsPerInterface; }
+constexpr int busIndex (int iface, int pair) noexcept    { return iface * maxPairsPerInterface + pair; }
+constexpr int interfaceOfBus (int b) noexcept            { return b / maxPairsPerInterface; }
+constexpr int pairOfBus (int b) noexcept                 { return b % maxPairsPerInterface; }
 
 /** Peak meter value written by an audio thread, read (and reset) by the UI. */
 struct Meter
@@ -31,19 +41,19 @@ struct Meter
     float readAndReset() noexcept { return peak.exchange (0.0f); }
 };
 
-/** Message-thread view of one row (an input, computer audio, or the return). */
+/** Message-thread view of one source (an interface input, computer audio, or the return). */
 struct SourceConfig
 {
     juce::String name;          // NDI source name for sends; label for the return
-    float gainDb = 0.0f;
-    bool sendEnabled = false;   // send to NDI (inputs + computer audio only)
-    bool sendStereo = true;     // send as 2-channel (dual-mono for mic inputs)
+    float gainDb = 0.0f;        // trim
+    bool sendEnabled = true;    // send to NDI (inputs + computer audio only)
+    bool sendStereo = true;     // 2-channel NDI source (dual-mono for mic inputs)
     bool sendMuted = false;     // "cough": mutes the NDI send, not the headphones
 };
 
-/** One output pair (Out 1/2, Out 3/4, ...). In stereo mode it is one stereo mix;
-    in dual-mono mode each output is its own mono mix (e.g. two separate headphone
-    feeds). Either way every source can be routed to each side independently. */
+/** One output pair (Out 1/2, Out 3/4, ...) of an interface. In stereo mode it is one
+    stereo mix; in dual-mono mode each output is its own mono mix. Either way every
+    source can be routed to each side independently, at its own level. */
 struct BusConfig
 {
     bool stereo = true;
@@ -52,53 +62,100 @@ struct BusConfig
     bool routes[2][numSources] {};         // [0] = left / first output, [1] = right / second output
     float levelsDb[2][numSources] {};      // per-source level into each output (0 dB default)
 };
+
+/** Which device an interface slot uses. */
+struct InterfaceConfig
+{
+    juce::String typeName, inputName, outputName;
+    double sampleRate = 48000.0;
+    int bufferSize = 128;
+    int maxIns = 0, maxOuts = 0;   // channels used; 0 = all (up to 16)
+
+    juce::String getKey() const { return outputName.isNotEmpty() ? outputName : inputName; }
+};
 } // namespace bridge
 
-/** All audio routing:
+/** All audio routing, for up to four audio interfaces at once:
 
       interface inputs ---------+--> NDI sends (one source per input) --> vMix
                                 |
       computer audio device ----+--> NDI send "Computer Audio"
         (virtual output)        |
                                 v
-      NDI return from vMix --> headphone matrix --> interface outputs (pairs)
+      NDI return from vMix --> headphone mixes --> any interface's outputs
+
+    Each interface runs on its own clock. Its inputs go straight to NDI. Audio that
+    crosses from one clock to another (another interface, the computer audio, the
+    NDI return) goes through a drift-correcting DriftFifo per destination interface.
 */
-class AudioEngine : private juce::AudioIODeviceCallback,
-                    private juce::ChangeListener
+class AudioEngine
 {
 public:
     AudioEngine();
-    ~AudioEngine() override;
+    ~AudioEngine();
 
-    /** Opens the interface (restoring a saved setup if given) and starts NDI. */
-    void startup (const juce::XmlElement* savedInterfaceState);
+    void startup();
     void shutdown();
 
-    // ---------------------------------------------------------------- interface device
-    juce::AudioDeviceManager& getInterfaceManager() noexcept { return interfaceManager; }
-    int getNumInputs() const noexcept   { return numInputs.load(); }
-    int getNumBuses() const noexcept    { return numBuses.load(); }
-    juce::String getInputChannelName (int index) const;
-    juce::String getBusChannelLabel (int bus) const;   // e.g. "Out 1/2"
-    juce::String getOutputChannelLabel (int bus, int side) const; // e.g. "Out 2"
-    bool busHasSecondOutput (int bus) const;           // false for the last pair of an odd count
-    juce::String getInterfaceSummary() const;
+    // ---------------------------------------------------------------- interfaces (message thread)
+    juce::StringArray getDeviceTypeNames();
+    juce::String getDefaultDeviceTypeName();
+    juce::StringArray getDeviceNames (const juce::String& typeName, bool inputs, bool rescan = false);
+    juce::Array<double> getSampleRates (int slot) const;
+    juce::Array<int> getBufferSizes (int slot) const;
 
-    // ---------------------------------------------------------------- computer audio device
+    /** Uses the first free slot; returns it, or -1 when all are taken. Opens it straight away. */
+    int addInterface (const bridge::InterfaceConfig&);
+    /** Restores a saved interface into a specific slot without opening it (call openInterface later). */
+    void setInterfaceConfig (int slot, const bridge::InterfaceConfig&);
+    juce::String openInterface (int slot);
+    void removeInterface (int slot);
+    /** Picks a sensible first interface (a TASCAM if connected) when none are configured. */
+    void addDefaultInterfaceIfNone();
+
+    bool isInterfaceUsed (int slot) const noexcept;
+    bool isInterfaceRunning (int slot) const noexcept;
+    const bridge::InterfaceConfig& getInterfaceConfig (int slot) const;
+    juce::String getInterfaceName (int slot) const;
+    juce::String getInterfaceStatus (int slot) const;
+    int getNumInputs (int slot) const noexcept;
+    int getNumOutputs (int slot) const noexcept;
+    int getNumPairs (int slot) const noexcept { return (getNumOutputs (slot) + 1) / 2; }
+    double getInterfaceSampleRate (int slot) const noexcept;
+    int getDeviceInputCount (int slot) const noexcept;    // channels the hardware offers
+    int getDeviceOutputCount (int slot) const noexcept;
+
+    /** Bumped whenever interfaces, channel counts or mix modes change, so the UI can rebuild. */
+    int getStructureVersion() const noexcept { return structureVersion.load(); }
+    void bumpStructure() noexcept { structureVersion.fetch_add (1); }
+
+    /** Re-opens interfaces that are configured but not running (unplugged, busy). Call every few seconds. */
+    void retryInterfaces();
+
+    // ---------------------------------------------------------------- sources & mixes (message thread)
+    bool sourceExists (int source) const noexcept;
+    bridge::SourceConfig& getSourceConfig (int source)  { return sourceConfigs[(size_t) source]; }
+    void applySourceConfig (int source);
+    juce::String getSourceDeviceLabel (int source) const;      // e.g. "TASCAM US-4x4HR · IN 2"
+    juce::String getSourceKey (int source) const;              // stable key for saving
+    int findSourceByKey (const juce::String& key) const;
+    static juce::String defaultSourceName (int source);
+
+    bool busExists (int bus) const noexcept;
+    bool busHasSecondOutput (int bus) const noexcept;
+    bridge::BusConfig& getBusConfig (int bus)           { return busConfigs[(size_t) bus]; }
+    void applyBusConfig (int bus);
+    juce::String getBusLabel (int bus) const;                  // "Out 1/2"
+    juce::String getOutputLabel (int bus, int side) const;     // "Out 2"
+    juce::String getBusKey (int bus) const;
+    int findBusByKey (const juce::String& key) const;
+
+    // ---------------------------------------------------------------- computer audio & NDI return
     juce::StringArray getComputerAudioDeviceNames();
-    /** Empty name closes it. Returns an error message or empty on success. */
     juce::String openComputerAudioDevice (const juce::String& inputDeviceName);
     juce::String getComputerAudioDeviceName() const { return computerDeviceName; }
     bool isComputerAudioRunning() const noexcept   { return computerRunning.load(); }
     juce::String getComputerAudioSummary() const;
-
-    // ---------------------------------------------------------------- configuration (message thread)
-    bridge::SourceConfig& getSourceConfig (int source)  { return sourceConfigs[(size_t) source]; }
-    bridge::BusConfig& getBusConfig (int bus)           { return busConfigs[(size_t) bus]; }
-
-    /** Push a changed SourceConfig into the audio/NDI side. */
-    void applySourceConfig (int source);
-    void applyBusConfig (int bus);
 
     void setReturnSource (const juce::String& fullNdiName);
     juce::String getReturnSource() const { return returnSourceName; }
@@ -106,91 +163,72 @@ public:
     double getReturnBufferMs() const { return returnBufferMs; }
     void setComputerBufferMs (double ms);
     double getComputerBufferMs() const { return computerBufferMs; }
+    void setCrossBufferMs (double ms);
+    double getCrossBufferMs() const { return crossBufferMs; }
+
+    /** Stats of the return as heard by the first interface that plays it (null if none). */
+    const DriftFifo* getReturnStats() const;
 
     // ---------------------------------------------------------------- live status
-    bridge::Meter& getSourceMeter (int source) noexcept           { return sourceMeters[(size_t) source]; }
-    bridge::Meter& getBusMeter (int bus, int side) noexcept        { return busMeters[(size_t) (bus * 2 + side)]; }
-    NdiSendHub& getSendHub() noexcept      { return sendHub; }
-    NdiReceiver& getReceiver() noexcept    { return receiver; }
-    NdiFinder& getFinder() noexcept        { return finder; }
-    DriftFifo& getReturnFifo() noexcept    { return returnFifo; }
-    DriftFifo& getComputerFifo() noexcept  { return computerFifo; }
+    bridge::Meter& getSourceMeter (int source) noexcept { return sourceMeters[(size_t) source]; }
+    bridge::Meter& getOutputMeter (int bus, int side) noexcept { return outputMeters[(size_t) (bus * 2 + side)]; }
+    float getAudioLoad() const noexcept;     // 0..1, busiest audio callback
+    NdiSendHub& getSendHub() noexcept       { return sendHub; }
+    NdiReceiver& getReceiver() noexcept     { return receiver; }
+    NdiFinder& getFinder() noexcept         { return finder; }
 
-    static juce::String defaultSourceName (int source);
-
-    /** For tests: drive the interface callback with a fake device. */
-    juce::AudioIODeviceCallback& getInterfaceCallback() noexcept { return *this; }
+    /** For tests: the callback of a slot, to drive with a fake device. */
+    juce::AudioIODeviceCallback& getInterfaceCallback (int slot);
 
 private:
-    // Interface callback
-    void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
-                                           float* const* outputChannelData, int numOutputChannels,
-                                           int numSamples, const juce::AudioIODeviceCallbackContext&) override;
-    void audioDeviceAboutToStart (juce::AudioIODevice*) override;
-    void audioDeviceStopped() override;
-    void changeListenerCallback (juce::ChangeBroadcaster*) override;
-    void selectTascamIfPresent();
+    struct Interface;
+    struct ComputerCallback;
+    friend struct Interface;
+    friend struct ComputerCallback;
 
-    void processChunk (const float* const* in, int numIn, float* const* out, int numOut, int offset, int n) noexcept;
-
-    // Computer audio (second device, its own clock)
-    struct ComputerCallback : juce::AudioIODeviceCallback
-    {
-        explicit ComputerCallback (AudioEngine& e) : engine (e) {}
-        void audioDeviceIOCallbackWithContext (const float* const*, int, float* const*, int, int,
-                                               const juce::AudioIODeviceCallbackContext&) override;
-        void audioDeviceAboutToStart (juce::AudioIODevice*) override;
-        void audioDeviceStopped() override;
-
-        AudioEngine& engine;
-        double sampleRate = 48000.0;
-        juce::HeapBlock<float> scratchL, scratchR;
-        int scratchSize = 0;
-    };
-
-    juce::AudioIODeviceType* getComputerDeviceType();
+    juce::AudioIODeviceType* findType (const juce::String& typeName);
+    DriftFifo* ensureCross (int source, int consumerSlot);
+    double targetMsForSource (int source) const;
+    void fanOut (int source, const float* l, const float* r, int n, double rate, int skipSlot) noexcept;
+    void openSendsForSlot (int slot);
+    void resetSlotDefaults (int slot);
 
     // Devices
-    juce::AudioDeviceManager interfaceManager;
-    juce::OwnedArray<juce::AudioIODeviceType> computerTypes;
+    juce::AudioDeviceManager typeFactory;
+    juce::OwnedArray<juce::AudioIODeviceType> deviceTypes;
+    juce::StringArray scannedTypes;
+    std::array<std::unique_ptr<Interface>, bridge::maxInterfaces> interfaces;
+    std::unique_ptr<ComputerCallback> computerCallback;
     std::unique_ptr<juce::AudioIODevice> computerDevice;
-    ComputerCallback computerCallback { *this };
     juce::String computerDeviceName;
     std::atomic<bool> computerRunning { false };
 
+    // Clock bridges: cross[source][consumer interface]; created on demand, freed at shutdown
+    std::array<std::array<std::atomic<DriftFifo*>, bridge::maxInterfaces>, bridge::numSources> cross;
+    juce::OwnedArray<DriftFifo> crossStore;       // message thread only
+    std::vector<float> returnScratchL, returnScratchR;
+
     // NDI
     NdiSendHub sendHub;
-    DriftFifo returnFifo, computerFifo;
-    NdiReceiver receiver { returnFifo };
+    NdiReceiver receiver;
     NdiFinder finder;
 
     // Message-thread configuration
     std::array<bridge::SourceConfig, bridge::numSources> sourceConfigs;
-    std::array<bridge::BusConfig, bridge::maxBuses> busConfigs;
+    std::array<bridge::BusConfig, bridge::numBuses> busConfigs;
     juce::String returnSourceName;
-    double returnBufferMs = 60.0, computerBufferMs = 30.0;
+    double returnBufferMs = 60.0, computerBufferMs = 30.0, crossBufferMs = 25.0;
 
     // Audio-thread parameters
     std::array<std::atomic<float>, bridge::numSources> sourceGain;
-    // Per output channel (bus * 2 + side)
-    std::array<std::atomic<float>, bridge::maxBuses * 2> outGain;
-    // Linear gain of each source into each output channel; 0 = not routed.
-    std::array<std::array<std::atomic<float>, bridge::maxBuses * 2>, bridge::numSources> routeGain;
-    std::array<std::atomic<bool>, bridge::maxBuses> busStereo;
+    std::array<std::atomic<float>, bridge::numOutChannels> outGain;
+    std::array<std::array<std::atomic<float>, bridge::numOutChannels>, bridge::numSources> routeGain;
+    std::array<std::atomic<bool>, bridge::numBuses> busStereo;
 
     std::array<bridge::Meter, bridge::numSources> sourceMeters;
-    std::array<bridge::Meter, bridge::maxBuses * 2> busMeters;
-
-    // Interface callback state (set in audioDeviceAboutToStart)
-    static constexpr int maxDeviceChannels = 64;
-    std::atomic<int> numInputs { 0 }, numBuses { 0 };
-    std::array<int, maxDeviceChannels> activeInputChannel {};   // callback index -> device channel
-    std::array<int, maxDeviceChannels> outputIndexForChannel {}; // device channel -> callback index or -1
-    int numActiveInputs = 0;
-    double sampleRate = 48000.0;
-    juce::AudioBuffer<float> inputScratch, mixScratch;
-    std::array<bool, bridge::maxInputs> inputPresent {};
-    static constexpr int chunkSize = 1024;
+    std::array<bridge::Meter, bridge::numOutChannels> outputMeters;
+    std::atomic<int> structureVersion { 0 };
+    std::atomic<float> computerLoad { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

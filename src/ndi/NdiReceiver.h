@@ -1,12 +1,12 @@
 #pragma once
 
-#include "dsp/DriftFifo.h"
-
 #include <juce_core/juce_core.h>
 #include <atomic>
+#include <functional>
 
 /** Receives audio from one NDI source (e.g. a vMix bus/output) on its own
-    thread and feeds it into a DriftFifo that the interface callback pulls from.
+    thread and hands each frame to `onAudio` (the engine fans it out to every
+    interface that plays it).
 
     The receiver asks NDI for audio only, so a vMix output that also carries
     video costs no video decoding here.
@@ -14,7 +14,17 @@
 class NdiReceiver : private juce::Thread
 {
 public:
-    explicit NdiReceiver (DriftFifo& destination, juce::String receiverName = "NDI Audio Bridge Return");
+    /** Called on the receive thread with planar L/R (R may equal L for mono). */
+    using AudioSink = std::function<void (const float* l, const float* r, int numSamples, double sampleRate)>;
+
+    explicit NdiReceiver (juce::String receiverName = "NDI Audio Bridge Return");
+
+    /** Set before start(). onReset is called when the source changes. */
+    AudioSink onAudio;
+    std::function<void()> onReset;
+
+    /** Payload bytes received so far (for the network glance). */
+    juce::uint64 getBytesReceived() const noexcept { return bytesReceived.load(); }
     ~NdiReceiver() override;
 
     void start();
@@ -36,8 +46,8 @@ public:
 private:
     void run() override;
 
-    DriftFifo& fifo;
     const juce::String recvName;
+    std::atomic<juce::uint64> bytesReceived { 0 };
 
     mutable juce::SpinLock sourceLock;
     juce::String sourceName;

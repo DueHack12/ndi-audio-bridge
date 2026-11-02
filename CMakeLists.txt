@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() to take effect on macOS.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(NDIAudioBridge VERSION 0.2.0 LANGUAGES C CXX)
+project(NDIAudioBridge VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -74,6 +74,15 @@ target_sources(NDIAudioBridge PRIVATE
     src/Main.cpp
     src/engine/AudioEngine.cpp
     src/engine/Settings.cpp
+    src/engine/SystemMonitor.cpp
+    src/ui/Theme.cpp
+    src/ui/Widgets.cpp
+    src/ui/PatchView.cpp
+    src/ui/MixerPanel.cpp
+    src/ui/SourceInspector.cpp
+    src/ui/RoutingPage.cpp
+    src/ui/Pages.cpp
+    src/ui/Sidebar.cpp
     src/ui/MainComponent.cpp
     ${NDIAB_CORE_SOURCES})
 

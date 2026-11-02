@@ -21,9 +21,10 @@
 class DriftFifo
 {
 public:
-    DriftFifo()
+    /** Capacity is allocated once and never resized (1 << 16 = ~1.3 s at 48 kHz). */
+    explicit DriftFifo (int capacityFrames = 1 << 16)
     {
-        fifo.prepare (1 << 16); // ~1.3 s at 48 kHz; allocated once, never resized
+        fifo.prepare (capacityFrames);
     }
 
     /** Call while the consumer is stopped (e.g. from audioDeviceAboutToStart). */

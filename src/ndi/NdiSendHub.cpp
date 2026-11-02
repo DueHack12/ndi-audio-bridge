@@ -6,7 +6,7 @@
 NdiSendHub::NdiSendHub() : juce::Thread ("NDI send")
 {
     for (auto& s : slots)
-        s.fifo.prepare (1 << 15); // ~680 ms at 48 kHz
+        s.fifo.prepare (1 << 14); // ~340 ms at 48 kHz
 }
 
 NdiSendHub::~NdiSendHub()
@@ -136,6 +136,8 @@ void NdiSendHub::run()
                 f.p_metadata = nullptr;
 
                 ndi->send_send_audio_v3 (st.instance, &f);
+                bytesSent.fetch_add ((juce::uint64) frame * (juce::uint64) channels * sizeof (float)
+                                     * (juce::uint64) juce::jmax (0, slot.connections.load()));
             }
 
             if (++st.pollCounter >= 250) // ~0.5 s

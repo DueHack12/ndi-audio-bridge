@@ -21,136 +21,235 @@ juce::PropertiesFile& getFile()
     return *file;
 }
 
-std::unique_ptr<juce::XmlElement> getSavedInterfaceState()
-{
-    return getFile().getXmlValue ("interface");
-}
+bool isDarkTheme()               { return getFile().getBoolValue ("darkTheme", false); }
+void setDarkTheme (bool dark)    { getFile().setValue ("darkTheme", dark); getFile().saveIfNeeded(); }
 
 juce::String getSavedComputerDevice()
 {
     if (auto xml = getFile().getXmlValue ("bridge"))
         return xml->getStringAttribute ("computerDevice");
-
     return {};
 }
 
-void restoreConfig (AudioEngine& engine)
+static void readSource (const juce::XmlElement& e, SourceConfig& c)
+{
+    c.name = e.getStringAttribute ("name", c.name);
+    c.gainDb = (float) e.getDoubleAttribute ("gainDb", c.gainDb);
+    c.sendEnabled = e.getBoolAttribute ("send", c.sendEnabled);
+    c.sendStereo = e.getBoolAttribute ("stereo", c.sendStereo);
+    c.sendMuted = e.getBoolAttribute ("muted", c.sendMuted);
+}
+
+static void readBusBasics (const juce::XmlElement& e, BusConfig& bc)
+{
+    bc.name = e.getStringAttribute ("name", bc.name);
+    bc.nameRight = e.getStringAttribute ("nameRight", bc.nameRight);
+    bc.gainDb = (float) e.getDoubleAttribute ("gainDb", bc.gainDb);
+    bc.gainDbRight = (float) e.getDoubleAttribute ("gainDbRight", bc.gainDb);
+    bc.stereo = e.getBoolAttribute ("stereo", true);
+}
+
+/** v0.1/v0.2 stored one interface (AudioDeviceManager state) and fixed indices:
+    sources 0..15 = inputs, 16 = computer, 17 = return; buses 0..7 = output pairs. */
+static void migrateV2 (AudioEngine& engine, const juce::XmlElement& xml)
+{
+    if (auto dev = getFile().getXmlValue ("interface"))
+    {
+        InterfaceConfig cfg;
+        cfg.typeName = dev->getStringAttribute ("deviceType");
+        cfg.outputName = dev->getStringAttribute ("audioOutputDeviceName");
+        cfg.inputName = dev->getStringAttribute ("audioInputDeviceName");
+        cfg.sampleRate = dev->getDoubleAttribute ("audioDeviceRate", 48000.0);
+        cfg.bufferSize = dev->getIntAttribute ("audioDeviceBufferSize", 128);
+        if (cfg.getKey().isNotEmpty())
+            engine.setInterfaceConfig (0, cfg);
+    }
+
+    auto mapOld = [] (int old) { return old < 16 ? sourceIndex (0, old) : (old == 16 ? computerSource : returnSource); };
+
+    for (auto* e : xml.getChildWithTagNameIterator ("SOURCE"))
+    {
+        const int i = e->getIntAttribute ("index", -1);
+        if (juce::isPositiveAndBelow (i, 18))
+            readSource (*e, engine.getSourceConfig (mapOld (i)));
+    }
+
+    for (auto* e : xml.getChildWithTagNameIterator ("BUS"))
+    {
+        const int b = e->getIntAttribute ("index", -1);
+        if (! juce::isPositiveAndBelow (b, maxPairsPerInterface))
+            continue;
+
+        auto& bc = engine.getBusConfig (busIndex (0, b));
+        readBusBasics (*e, bc);
+
+        auto routesOf = [&] (const juce::String& attr) { auto t = e->getStringAttribute (attr); return t.length() == 18 ? t : juce::String(); };
+        auto left = routesOf ("routesL"), right = routesOf ("routesR");
+        if (left.isEmpty())
+            left = right = routesOf ("routes");
+
+        auto levels = [&] (const juce::String& attr) { return juce::StringArray::fromTokens (e->getStringAttribute (attr), ",", {}); };
+        const auto levelsL = levels ("levelsL"), levelsR = levels ("levelsR");
+
+        for (int old = 0; old < 18; ++old)
+        {
+            const int s = mapOld (old);
+            if (left.isNotEmpty())  bc.routes[0][s] = left[old] == '1';
+            if (right.isNotEmpty()) bc.routes[1][s] = right[old] == '1';
+            if (levelsL.size() == 18) bc.levelsDb[0][s] = levelsL[old].getFloatValue();
+            if (levelsR.size() == 18) bc.levelsDb[1][s] = levelsR[old].getFloatValue();
+        }
+    }
+}
+
+void restore (AudioEngine& engine)
 {
     auto xml = getFile().getXmlValue ("bridge");
     if (xml == nullptr)
         return;
 
-    for (auto* e : xml->getChildWithTagNameIterator ("SOURCE"))
+    if (xml->getIntAttribute ("version", 1) < 3)
     {
-        const int i = e->getIntAttribute ("index", -1);
-        if (! juce::isPositiveAndBelow (i, numSources))
-            continue;
-
-        auto& c = engine.getSourceConfig (i);
-        c.name = e->getStringAttribute ("name", c.name);
-        c.gainDb = (float) e->getDoubleAttribute ("gainDb", c.gainDb);
-        c.sendEnabled = e->getBoolAttribute ("send", c.sendEnabled);
-        c.sendStereo = e->getBoolAttribute ("stereo", c.sendStereo);
-        c.sendMuted = e->getBoolAttribute ("muted", c.sendMuted);
+        migrateV2 (engine, *xml);
     }
-
-    for (auto* e : xml->getChildWithTagNameIterator ("BUS"))
+    else
     {
-        const int b = e->getIntAttribute ("index", -1);
-        if (! juce::isPositiveAndBelow (b, maxBuses))
-            continue;
-
-        auto& bc = engine.getBusConfig (b);
-        bc.name = e->getStringAttribute ("name", bc.name);
-        bc.nameRight = e->getStringAttribute ("nameRight", bc.nameRight);
-        bc.gainDb = (float) e->getDoubleAttribute ("gainDb", bc.gainDb);
-        bc.gainDbRight = (float) e->getDoubleAttribute ("gainDbRight", bc.gainDb);
-        bc.stereo = e->getBoolAttribute ("stereo", true);
-
-        auto readRoutes = [&] (const juce::String& attr, bool* dest)
+        for (auto* e : xml->getChildWithTagNameIterator ("INTERFACE"))
         {
-            const auto text = e->getStringAttribute (attr);
-            if (text.length() != numSources)
-                return false;
-            for (int s = 0; s < numSources; ++s)
-                dest[s] = text[s] == '1';
-            return true;
-        };
+            const int slot = e->getIntAttribute ("slot", -1);
+            if (! juce::isPositiveAndBelow (slot, maxInterfaces))
+                continue;
 
-        auto readLevels = [&] (const juce::String& attr, float* dest)
+            InterfaceConfig cfg;
+            cfg.typeName = e->getStringAttribute ("type");
+            cfg.inputName = e->getStringAttribute ("input");
+            cfg.outputName = e->getStringAttribute ("output");
+            cfg.sampleRate = e->getDoubleAttribute ("rate", 48000.0);
+            cfg.bufferSize = e->getIntAttribute ("buffer", 128);
+            cfg.maxIns = e->getIntAttribute ("ins", 0);
+            cfg.maxOuts = e->getIntAttribute ("outs", 0);
+            engine.setInterfaceConfig (slot, cfg);
+        }
+
+        for (auto* e : xml->getChildWithTagNameIterator ("SOURCE"))
         {
-            auto values = juce::StringArray::fromTokens (e->getStringAttribute (attr), ",", {});
-            if (values.size() == numSources)
-                for (int s = 0; s < numSources; ++s)
-                    dest[s] = values[s].getFloatValue();
-        };
-        readLevels ("levelsL", bc.levelsDb[0]);
-        readLevels ("levelsR", bc.levelsDb[1]);
+            const int s = engine.findSourceByKey (e->getStringAttribute ("key"));
+            if (s >= 0)
+                readSource (*e, engine.getSourceConfig (s));
+        }
 
-        // v0.1.0 stored one route per pair ("routes"): apply it to both sides.
-        if (! readRoutes ("routesL", bc.routes[0]) && readRoutes ("routes", bc.routes[0]))
-            std::copy (std::begin (bc.routes[0]), std::end (bc.routes[0]), std::begin (bc.routes[1]));
-        else
-            readRoutes ("routesR", bc.routes[1]);
+        for (auto* e : xml->getChildWithTagNameIterator ("BUS"))
+        {
+            const int b = engine.findBusByKey (e->getStringAttribute ("key"));
+            if (b < 0)
+                continue;
+
+            auto& bc = engine.getBusConfig (b);
+            readBusBasics (*e, bc);
+
+            for (auto& side : bc.routes)
+                std::fill (std::begin (side), std::end (side), false);
+
+            for (auto* r : e->getChildWithTagNameIterator ("ROUTE"))
+            {
+                const int s = engine.findSourceByKey (r->getStringAttribute ("src"));
+                const int side = r->getIntAttribute ("side", 0);
+                if (s < 0 || ! juce::isPositiveAndBelow (side, 2))
+                    continue;
+
+                bc.routes[side][s] = true;
+                bc.levelsDb[side][s] = (float) r->getDoubleAttribute ("db", 0.0);
+            }
+        }
     }
 
     engine.setReturnSource (xml->getStringAttribute ("returnSource"));
     engine.setReturnBufferMs (xml->getDoubleAttribute ("returnBufferMs", engine.getReturnBufferMs()));
     engine.setComputerBufferMs (xml->getDoubleAttribute ("computerBufferMs", engine.getComputerBufferMs()));
+    engine.setCrossBufferMs (xml->getDoubleAttribute ("crossBufferMs", engine.getCrossBufferMs()));
 }
 
 void save (AudioEngine& engine)
 {
     juce::XmlElement xml ("BRIDGE");
-    xml.setAttribute ("version", 1);
+    xml.setAttribute ("version", 3);
     xml.setAttribute ("returnSource", engine.getReturnSource());
     xml.setAttribute ("returnBufferMs", engine.getReturnBufferMs());
     xml.setAttribute ("computerBufferMs", engine.getComputerBufferMs());
+    xml.setAttribute ("crossBufferMs", engine.getCrossBufferMs());
     xml.setAttribute ("computerDevice", engine.getComputerAudioDeviceName());
 
-    for (int i = 0; i < numSources; ++i)
+    auto saveSource = [&] (int s)
     {
-        auto& c = engine.getSourceConfig (i);
+        auto& c = engine.getSourceConfig (s);
         auto* e = xml.createNewChildElement ("SOURCE");
-        e->setAttribute ("index", i);
+        e->setAttribute ("key", engine.getSourceKey (s));
         e->setAttribute ("name", c.name);
         e->setAttribute ("gainDb", c.gainDb);
         e->setAttribute ("send", c.sendEnabled);
         e->setAttribute ("stereo", c.sendStereo);
         e->setAttribute ("muted", c.sendMuted);
+    };
+
+    for (int slot = 0; slot < maxInterfaces; ++slot)
+    {
+        if (! engine.isInterfaceUsed (slot))
+            continue;
+
+        const auto& cfg = engine.getInterfaceConfig (slot);
+        auto* e = xml.createNewChildElement ("INTERFACE");
+        e->setAttribute ("slot", slot);
+        e->setAttribute ("type", cfg.typeName);
+        e->setAttribute ("input", cfg.inputName);
+        e->setAttribute ("output", cfg.outputName);
+        e->setAttribute ("rate", cfg.sampleRate);
+        e->setAttribute ("buffer", cfg.bufferSize);
+        e->setAttribute ("ins", cfg.maxIns);
+        e->setAttribute ("outs", cfg.maxOuts);
+
+        for (int ch = 0; ch < maxInsPerInterface; ++ch)
+            saveSource (sourceIndex (slot, ch));
     }
 
-    for (int b = 0; b < maxBuses; ++b)
+    saveSource (computerSource);
+    saveSource (returnSource);
+
+    for (int b = 0; b < numBuses; ++b)
     {
+        if (! engine.isInterfaceUsed (interfaceOfBus (b)))
+            continue;
+
         auto& bc = engine.getBusConfig (b);
         auto* e = xml.createNewChildElement ("BUS");
-        e->setAttribute ("index", b);
-        e->setAttribute ("name", bc.name);
-        e->setAttribute ("gainDb", bc.gainDb);
+        e->setAttribute ("key", engine.getBusKey (b));
         e->setAttribute ("stereo", bc.stereo);
+        e->setAttribute ("name", bc.name);
         e->setAttribute ("nameRight", bc.nameRight);
+        e->setAttribute ("gainDb", bc.gainDb);
         e->setAttribute ("gainDbRight", bc.gainDbRight);
 
         for (int side = 0; side < 2; ++side)
         {
-            juce::String routes;
             for (int s = 0; s < numSources; ++s)
-                routes << (bc.routes[side][s] ? "1" : "0");
-            e->setAttribute (side == 0 ? "routesL" : "routesR", routes);
+            {
+                if (! bc.routes[side][s])
+                    continue;
 
-            juce::StringArray levels;
-            for (int s = 0; s < numSources; ++s)
-                levels.add (juce::String (bc.levelsDb[side][s], 1));
-            e->setAttribute (side == 0 ? "levelsL" : "levelsR", levels.joinIntoString (","));
+                const bool deviceSource = interfaceOfSource (s) >= 0;
+                if (deviceSource && ! engine.isInterfaceUsed (interfaceOfSource (s)))
+                    continue;
+
+                auto* r = e->createNewChildElement ("ROUTE");
+                r->setAttribute ("src", engine.getSourceKey (s));
+                r->setAttribute ("side", side);
+                r->setAttribute ("db", bc.levelsDb[side][s]);
+            }
         }
     }
 
     auto& file = getFile();
     file.setValue ("bridge", &xml);
-
-    if (auto state = engine.getInterfaceManager().createStateXml())
-        file.setValue ("interface", state.get());
-
+    file.removeValue ("interface"); // v0.2's single-interface state is now part of "bridge"
     file.saveIfNeeded();
 }
 } // namespace Settings

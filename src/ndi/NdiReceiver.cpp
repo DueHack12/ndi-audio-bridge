@@ -1,8 +1,8 @@
 #include "NdiReceiver.h"
 #include "NdiLibrary.h"
 
-NdiReceiver::NdiReceiver (DriftFifo& destination, juce::String receiverName)
-    : juce::Thread ("NDI receive"), fifo (destination), recvName (std::move (receiverName))
+NdiReceiver::NdiReceiver (juce::String receiverName)
+    : juce::Thread ("NDI receive"), recvName (std::move (receiverName))
 {
 }
 
@@ -81,7 +81,8 @@ void NdiReceiver::run()
         {
             destroy();
             builtVersion = sourceVersion.load();
-            fifo.requestReset();
+            if (onReset)
+                onReset();
 
             const auto name = getSource();
 
@@ -123,7 +124,10 @@ void NdiReceiver::run()
                 const float* l = channelPtr (leftChan.load());
                 const float* r = audio.no_channels > 1 ? channelPtr (rightChan.load()) : l;
 
-                fifo.push (l, r, audio.no_samples, (double) audio.sample_rate);
+                if (onAudio)
+                    onAudio (l, r, audio.no_samples, (double) audio.sample_rate);
+
+                bytesReceived.fetch_add ((juce::uint64) audio.no_samples * (juce::uint64) audio.no_channels * sizeof (float));
 
                 sourceChannels = audio.no_channels;
                 sourceRate = audio.sample_rate;

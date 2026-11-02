@@ -2,39 +2,41 @@
 
 # NDI Audio Bridge
 
-Send the inputs of an audio interface (e.g. a TASCAM US-4x4HR) to vMix as separate
-NDI audio sources, bring an NDI return feed back from vMix, and build per-announcer
-headphone mixes on the interface outputs with a simple on/off matrix. Includes a
-virtual audio output so the computer's own sound can go through it too.
+Send the inputs of one or more audio interfaces (e.g. a TASCAM US-4x4HR plus a Scarlett) to
+vMix as separate NDI audio sources, bring an NDI return feed back from vMix, and build
+per-announcer headphone mixes on any interface's outputs by drawing wires. Includes a virtual
+audio output so the computer's own sound can go through it too.
 
 Runs on **macOS** (11+, Apple Silicon and Intel) and **Windows** (10/11, x64).
 
 ![NDI Audio Bridge](docs/screenshot.png)
 
 ```
- TASCAM IN 1-4 ──┬──────────────► NDI sources "Announcer 1", "Announcer 2", ... ──► vMix
-                 │
- Computer audio ─┼──────────────► NDI source  "Computer Audio" ───────────────────► vMix
- (virtual output)│
-                 ▼
- vMix NDI out ──► HEADPHONE MATRIX ──► TASCAM outputs: per channel, as stereo pairs
-                  (toggle what each        or as separate mono feeds
-                   output hears)
+ Interface inputs ─┬────────────► NDI sources "Announcer 1", "Guest Mic", ... ──► vMix
+ (up to 4 devices) │
+ Computer audio ───┼────────────► NDI source  "Computer Audio" ─────────────────► vMix
+ (virtual output)  │
+                   ▼
+ vMix NDI out ──► WIRES + MIXER ──► any interface's outputs: stereo pairs or
+                  (level per source        separate mono headphone feeds
+                   per mix)
 ```
 
 ## What it does
 
-| Panel | What it's for |
+| Where | What it's for |
 |---|---|
-| **Send to vMix** | One row per interface input. **SEND** publishes it as its own NDI source, named whatever you type. Level, meter, **STEREO/MONO** (mic inputs go out dual-mono in stereo mode, which vMix handles best), and a **MUTE** cough button that silences the send to vMix without touching the headphones. The last row is the computer audio. |
-| **vMix return** | Pick any NDI source on the network (e.g. a vMix output). Only its audio is received. A small buffer absorbs network jitter, and the app continuously corrects clock drift between the vMix machine and the interface, so it never clicks or drifts out of sync. |
-| **Computer audio** | Pick the virtual device your computer plays into. It can be sent as its own NDI source and/or put into the headphone mixes. |
-| **Headphone mixes** | Each output pair (Out 1/2, Out 3/4, ...) is either **STEREO** (one mix, one name and level) or **2× MONO** (each output is its own mix with its own name, level and meter, e.g. two separate headphone feeds). Every cell routes a source to one output channel, so left and right are always set separately: put a mic in one ear only, or build a split feed. Stereo sources (vMix return, computer audio) keep their L/R in a stereo pair and fold to mono in 2× mono. Shift-click a cell to set both sides at once. |
+| **Routing: wires** | Sources on the left (grouped by interface, then computer audio and the vMix return), headphone mixes on the right. **Drag from a source's dot onto a mix** to add it. Click a mix to edit it below. |
+| **Routing: mixer** | One tab per headphone mix. Each source gets a strip: **ON**, **L / R** (for stereo mixes, so a mic can go in one ear only), a fader for its level in this mix, and a meter. The master strip names the mix and sets its overall level. **STEREO / 2× MONO** turns an output pair into one stereo mix or two separate mono feeds. |
+| **Source pop-out** | Click any source. Rename it (that's its NDI name in vMix), switch its NDI send on/off, stereo/mono send, **cough mute** (silences the send to vMix, not the headphones), trim, and every mix it feeds with its own level. For **Computer Audio** pick the virtual device; for **vMix Return** pick the NDI source and its buffer. |
+| **Interfaces** | Add up to four audio interfaces, each with its own driver, sample rate and buffer. **Inputs used / outputs used** hides channels you don't need. |
+| **Settings** | Light or dark mode, the buffers, NDI runtime info. |
+| **Sidebar** | Hover it to expand. At the bottom: CPU (this app vs. the whole computer, and how much is free) and network (what NDI is sending/receiving and how much of the link is free). |
 
 Everything you change is saved automatically and restored the next time you open the app.
 
 > **TASCAM tip:** turn the interface's **MONITOR MIX** knob fully to **COMPUTER**. Otherwise the
-> hardware also sends every input straight to the headphones and the matrix can't turn them off.
+> hardware also sends every input straight to the headphones and the app can't turn them off.
 
 ---
 
@@ -57,10 +59,10 @@ Everything you change is saved automatically and restored the next time you open
    plays now goes into the app.
 5. Open **NDI Audio Bridge** and allow **Microphone** (needed to read the interface inputs) and
    **Local Network** (needed for NDI) when macOS asks.
-6. Click **Audio Interface...** and choose the TASCAM for both input and output, **48000 Hz**,
-   buffer **128** (raise it to 256 if you hear crackles). The app picks the TASCAM
-   automatically on first launch if it's plugged in.
-7. In **Computer Audio**, choose **NDI Audio Bridge**.
+6. The app picks the TASCAM automatically on first launch if it's plugged in. To check or add
+   another interface, hover the sidebar and open **Interfaces**: 48000 Hz, buffer **128**
+   (raise it to 256 if you hear crackles).
+7. On **Routing**, click **Computer Audio** and under *Plays from* choose **NDI Audio Bridge**.
 
 To remove the virtual device later, run the installer with `--uninstall` in Terminal:
 
@@ -81,9 +83,9 @@ If you'd rather use stock BlackHole, `brew install blackhole-2ch` and pick
    settings** and set the output device to **CABLE Input**.
 4. Unzip `NDI-Audio-Bridge-Windows.zip` and run **NDI Audio Bridge.exe**. When Windows Firewall
    asks, allow it on **Private networks** (NDI won't work otherwise).
-5. **Audio Interface...**: set the type to **ASIO** and choose the TASCAM, 48000 Hz, buffer 128.
-   Use ASIO: in "Windows Audio" mode the TASCAM's inputs may appear as separate stereo devices.
-6. In **Computer Audio**, choose **CABLE Output**.
+5. **Interfaces** (in the sidebar): driver **ASIO**, the TASCAM, 48000 Hz, buffer 128. Use ASIO:
+   in "Windows Audio" mode the TASCAM's inputs may appear as separate stereo devices.
+6. On **Routing**, click **Computer Audio** and under *Plays from* choose **CABLE Output**.
 
 ## Setup: vMix
 
@@ -92,24 +94,26 @@ If you'd rather use stock BlackHole, `brew install blackhole-2ch` and pick
 with its own fader. Add `YOUR-MAC (Computer Audio)` the same way if you send it.
 
 **Sending a return feed back:** in vMix, enable NDI on one of the outputs (*Settings > Outputs /
-NDI / SRT*) and set that output's audio to the mix the announcers should hear. Then select
-it in the app's **vMix Return** list (names look like `VMIX-PC (vMix - Output 2)`).
+NDI / SRT*) and set that output's audio to the mix the announcers should hear. Then click
+**vMix Return** in the app and pick it under *NDI source* (names look like `VMIX-PC (vMix - Output 2)`).
 
 > **Use a mix-minus for the return.** If the return feed contains the announcers' own mics,
-> they'll hear themselves twice: once instantly through the matrix, then again delayed through
+> they'll hear themselves twice: once instantly through the app, then again delayed through
 > vMix. Point the return at a vMix bus (e.g. Bus A) that carries program audio *without* the
-> announcer mics, and let the headphone matrix handle hearing themselves and each other.
+> announcer mics, and let the headphone mixes handle hearing themselves and each other.
 
 ---
 
 ## Latency
 
-* Interface buffer 128 samples @ 48 kHz ≈ 2.7 ms. The headphone matrix runs at this latency,
+* Interface buffer 128 samples @ 48 kHz ≈ 2.7 ms. Headphone mixes run at this latency,
   so announcers hear themselves and each other almost instantly.
+* A mix that plays an input from a *different* interface adds the **between interfaces** buffer
+  (default 25 ms, in Settings), because the two interfaces run on separate clocks.
 * NDI sends go out in 10 ms frames; vMix adds its own buffering on top.
-* The return **Buffer** (default 60 ms) covers network jitter. On a solid wired network
-  you can lower it to ~30 ms. If the status line shows the *dropouts* count going up, raise it.
-  The status line also shows the live buffer and the drift correction in ppm.
+* The return **buffer** (default 60 ms, in the vMix Return pop-out) covers network jitter. On a
+  solid wired network you can lower it to ~30 ms. If its status line shows the *dropouts* count
+  going up, raise it. The status line also shows the live buffer and the drift correction in ppm.
 
 ## Troubleshooting
 
@@ -118,10 +122,11 @@ it in the app's **vMix Return** list (names look like `VMIX-PC (vMix - Output 2)
 | Red "NDI runtime not found" | Install the NDI Runtime (links in the setup steps above), restart the app. To point at a specific library, set `NDI_AUDIO_BRIDGE_NDI_LIB=/path/to/libndi.dylib`. |
 | vMix doesn't list the sources | Same network/subnet? Windows Firewall allowed on Private networks? On macOS, Local Network permission (System Settings > Privacy & Security > Local Network). Across subnets, add the vMix PC's IP with **NDI Access Manager** (part of NDI Tools) on both machines. |
 | Status says "Live, 0 receivers" | The source is on the network, but vMix hasn't added it as an input yet. |
-| Meters move but no sound from vMix | Check the row isn't on **MUTE** and the input is unmuted in vMix. |
-| Everyone hears every mic regardless of the matrix | Turn the TASCAM's MONITOR MIX knob fully to COMPUTER. |
+| Meters move but no sound in vMix | Check the source isn't on **cough mute** and the input is unmuted in vMix. |
+| Everyone hears every mic whatever the mixes say | Turn the TASCAM's MONITOR MIX knob fully to COMPUTER. |
+| An interface chip is red | It's unplugged or busy. The app retries every few seconds; check **Interfaces**. |
 | No input level at all on macOS | System Settings > Privacy & Security > Microphone: enable NDI Audio Bridge. |
-| Computer audio silent | System (or Windows) output must be set to the virtual device, and the same device picked in **Computer Audio**. |
+| Computer audio silent | System (or Windows) output must be set to the virtual device, and the same device picked under *Plays from* in the **Computer Audio** pop-out. |
 | Return crackles or drops out | Raise the return **Buffer**, use wired Ethernet rather than Wi-Fi. |
 
 ---
@@ -163,18 +168,21 @@ workflow creates the `v0.1.1` tag and release with both zips. Pushing a `v*` tag
 
 `NDIAudioBridgeSelfTest` runs without audio hardware. It simulates 10 minutes of a bursty,
 drifting network feed (±300 ppm, 25/30 fps frame sizes, 48 kHz → 44.1 kHz) and checks for
-zero dropouts, steady latency and a click-free signal. If an NDI runtime is installed, it also
+zero dropouts, steady latency and a click-free signal. It also drives the real mixing engine with
+two fake interfaces to check per-side routing, per-source levels, mono folding and mixing
+across interfaces. If an NDI runtime is installed, it also
 sends a tone through a real NDI sender and receiver and checks it arrives intact.
 
 ### Code layout
 
 ```
-src/engine/AudioEngine.*   device callbacks, routing matrix, NDI wiring
-src/engine/Settings.*      save/restore
-src/dsp/DriftFifo.h        clock-drift-correcting resampling FIFO (return + computer audio)
-src/dsp/StereoFifo.h       lock-free FIFO between audio callback and NDI thread
+src/engine/AudioEngine.*   interfaces, clock bridges between them, routing, NDI wiring
+src/engine/Settings.*      save/restore (and migration from 0.1/0.2)
+src/engine/SystemMonitor.* CPU and network numbers for the sidebar
+src/dsp/DriftFifo.h        clock-drift-correcting resampling FIFO
+src/dsp/StereoFifo.h       lock-free FIFO between audio callbacks and the NDI thread
 src/ndi/                   runtime NDI loader, sender hub, receiver, source finder
-src/ui/MainComponent.*     the window
+src/ui/                    sidebar, wire view, mixer, source pop-out, pages, theme
 scripts/macos/             virtual audio device build/install
 ```
 

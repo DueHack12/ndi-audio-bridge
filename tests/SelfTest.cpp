@@ -138,12 +138,13 @@ void driftScenario (const char* name, double producerRate, double drift, double 
 }
 
 
-/** A stand-in interface: 4 inputs, 4 outputs, 48 kHz, all channels active. */
+/** A stand-in interface: N inputs, M outputs, 48 kHz, all channels active. */
 struct FakeInterface : juce::AudioIODevice
 {
-    FakeInterface() : juce::AudioIODevice ("Fake TASCAM", "Test") {}
-    juce::StringArray getOutputChannelNames() override { return { "Out 1", "Out 2", "Out 3", "Out 4" }; }
-    juce::StringArray getInputChannelNames() override  { return { "In 1", "In 2", "In 3", "In 4" }; }
+    FakeInterface (const juce::String& deviceName, int ins, int outs) : juce::AudioIODevice (deviceName, "Test"), numIns (ins), numOuts (outs) {}
+    juce::StringArray names (const char* prefix, int n) const { juce::StringArray a; for (int i = 0; i < n; ++i) a.add (prefix + juce::String (i + 1)); return a; }
+    juce::StringArray getOutputChannelNames() override { return names ("Out ", numOuts); }
+    juce::StringArray getInputChannelNames() override  { return names ("In ", numIns); }
     juce::Array<double> getAvailableSampleRates() override { return { 48000.0 }; }
     juce::Array<int> getAvailableBufferSizes() override  { return { 256 }; }
     int getDefaultBufferSize() override { return 256; }
@@ -157,90 +158,146 @@ struct FakeInterface : juce::AudioIODevice
     int getCurrentBufferSizeSamples() override { return 256; }
     double getCurrentSampleRate() override { return 48000.0; }
     int getCurrentBitDepth() override { return 32; }
-    juce::BigInteger getActiveOutputChannels() const override { juce::BigInteger b; b.setRange (0, 4, true); return b; }
-    juce::BigInteger getActiveInputChannels() const override  { juce::BigInteger b; b.setRange (0, 4, true); return b; }
+    juce::BigInteger getActiveOutputChannels() const override { juce::BigInteger b; b.setRange (0, numOuts, true); return b; }
+    juce::BigInteger getActiveInputChannels() const override  { juce::BigInteger b; b.setRange (0, numIns, true); return b; }
     int getOutputLatencyInSamples() override { return 0; }
     int getInputLatencyInSamples() override { return 0; }
+    const int numIns, numOuts;
+};
+
+/** Drives one fake interface's callback with constant input levels. */
+struct FakeRun
+{
+    FakeRun (juce::AudioIODeviceCallback& c, std::initializer_list<float> inputLevels, int outs)
+        : cb (c), ins (inputLevels.size()), outsBuf ((size_t) outs)
+    {
+        size_t i = 0;
+        for (auto v : inputLevels)
+            ins[i++].assign (block, v);
+        for (auto& o : outsBuf)
+            o.assign (block, 0.0f);
+    }
+
+    void tick()
+    {
+        std::vector<const float*> in;
+        std::vector<float*> out;
+        for (auto& v : ins) in.push_back (v.data());
+        for (auto& v : outsBuf) out.push_back (v.data());
+        cb.audioDeviceIOCallbackWithContext (in.data(), (int) in.size(), out.data(), (int) out.size(), block, {});
+    }
+
+    float out (int ch) const { return outsBuf[(size_t) ch][block - 1]; }
+
+    static constexpr int block = 256;
+    juce::AudioIODeviceCallback& cb;
+    std::vector<std::vector<float>> ins, outsBuf;
 };
 
 void routingMatrix()
 {
-    std::printf ("Headphone matrix routing\n");
+    std::printf ("Headphone mixes (two interfaces)\n");
 
     juce::ScopedJuceInitialiser_GUI juceInit; // AudioDeviceManager needs the message system
     AudioEngine engine;
-    FakeInterface device;
-    auto& cb = engine.getInterfaceCallback();
-    cb.audioDeviceAboutToStart (&device);
 
-    // Constant test signals: In 1 = 0.1, In 2 = 0.2; vMix return L = 0.5, R = 0.25.
-    constexpr int block = 256;
-    std::vector<float> in1 (block, 0.1f), in2 (block, 0.2f), in3 (block, 0.0f), in4 (block, 0.0f);
-    std::vector<std::vector<float>> outs (4, std::vector<float> (block));
-    const float* ins[] = { in1.data(), in2.data(), in3.data(), in4.data() };
-    float* outPtrs[] = { outs[0].data(), outs[1].data(), outs[2].data(), outs[3].data() };
+    bridge::InterfaceConfig tascamCfg, scarlettCfg;
+    tascamCfg.typeName = scarlettCfg.typeName = "Test";
+    tascamCfg.inputName = tascamCfg.outputName = "Fake TASCAM";
+    scarlettCfg.inputName = scarlettCfg.outputName = "Fake Scarlett";
+    engine.setInterfaceConfig (0, tascamCfg);
+    engine.setInterfaceConfig (1, scarlettCfg);
 
-    // The vMix return arrives continuously, one block per callback.
+    FakeInterface tascam ("Fake TASCAM", 4, 4), scarlett ("Fake Scarlett", 2, 2);
+    auto& cb0 = engine.getInterfaceCallback (0);
+    auto& cb1 = engine.getInterfaceCallback (1);
+    cb0.audioDeviceAboutToStart (&tascam);
+    cb1.audioDeviceAboutToStart (&scarlett);
+
+    // TASCAM In 1 = 0.1, In 2 = 0.2; Scarlett In 1 = 0.3; vMix return L = 0.5, R = 0.25.
+    FakeRun t (cb0, { 0.1f, 0.2f, 0.0f, 0.0f }, 4);
+    FakeRun sc (cb1, { 0.3f, 0.0f }, 2);
+    std::vector<float> retL (FakeRun::block, 0.5f), retR (FakeRun::block, 0.25f);
+
     engine.setReturnBufferMs (10.0);
-    std::vector<float> retL (block, 0.5f), retR (block, 0.25f);
+    engine.setCrossBufferMs (10.0);
 
     auto run = [&]
     {
-        for (int i = 0; i < 8; ++i) // let the return feed settle
+        for (int i = 0; i < 12; ++i) // let the clock bridges settle
         {
-            engine.getReturnFifo().push (retL.data(), retR.data(), block, 48000.0);
-            cb.audioDeviceIOCallbackWithContext (ins, 4, outPtrs, 4, block, {});
+            engine.getReceiver().onAudio (retL.data(), retR.data(), FakeRun::block, 48000.0);
+            sc.tick();
+            t.tick();
         }
     };
     auto near = [] (float a, float b) { return std::abs (a - b) < 1.0e-3f; };
-    auto out = [&] (int ch) { return outs[(size_t) ch][block - 1]; };
+    const int in1 = bridge::sourceIndex (0, 0), in2 = bridge::sourceIndex (0, 1), scIn1 = bridge::sourceIndex (1, 0);
 
-    // Pair 1 (Out 1/2) STEREO: In 1 on the left only, return on both sides.
-    auto& p1 = engine.getBusConfig (0);
+    // TASCAM Out 1/2 STEREO: In 1 on the left only, return on both sides.
+    auto& p1 = engine.getBusConfig (bridge::busIndex (0, 0));
     p1 = {};
-    p1.stereo = true;
-    p1.routes[0][0] = true;
+    p1.routes[0][in1] = true;
     p1.routes[0][bridge::returnSource] = p1.routes[1][bridge::returnSource] = true;
-    engine.applyBusConfig (0);
+    engine.applyBusConfig (bridge::busIndex (0, 0));
 
-    // Pair 2 (Out 3/4) 2x MONO: Out 3 = In 2 + return, Out 4 = In 1 at -6 dB.
-    auto& p2 = engine.getBusConfig (1);
+    // TASCAM Out 3/4 2x MONO: Out 3 = In 2 + return, Out 4 = In 1 at -6 dB.
+    auto& p2 = engine.getBusConfig (bridge::busIndex (0, 1));
     p2 = {};
     p2.stereo = false;
-    p2.routes[0][1] = true;
+    p2.routes[0][in2] = true;
     p2.routes[0][bridge::returnSource] = true;
-    p2.routes[1][0] = true;
+    p2.routes[1][in1] = true;
     p2.gainDbRight = -6.0206f;
-    engine.applyBusConfig (1);
+    engine.applyBusConfig (bridge::busIndex (0, 1));
+
+    // Scarlett Out 1/2 STEREO (nothing yet)
+    auto& p3 = engine.getBusConfig (bridge::busIndex (1, 0));
+    p3 = {};
+    engine.applyBusConfig (bridge::busIndex (1, 0));
 
     run();
-    check (near (out (0), 0.6f),   "stereo pair: Out 1 = In 1 + return L (" + juce::String (out (0), 4) + ")");
-    check (near (out (1), 0.25f),  "stereo pair: Out 2 = return R only, In 1 not on the right (" + juce::String (out (1), 4) + ")");
-    check (near (out (2), 0.575f), "2x mono: Out 3 = In 2 + return folded to mono (" + juce::String (out (2), 4) + ")");
-    check (near (out (3), 0.05f),  "2x mono: Out 4 = In 1 with its own -6 dB level (" + juce::String (out (3), 4) + ")");
+    check (near (t.out (0), 0.6f),   "stereo pair: Out 1 = In 1 + return L (" + juce::String (t.out (0), 4) + ")");
+    check (near (t.out (1), 0.25f),  "stereo pair: Out 2 = return R only, In 1 not on the right (" + juce::String (t.out (1), 4) + ")");
+    check (near (t.out (2), 0.575f), "2x mono: Out 3 = In 2 + return folded to mono (" + juce::String (t.out (2), 4) + ")");
+    check (near (t.out (3), 0.05f),  "2x mono: Out 4 = In 1 with its own -6 dB level (" + juce::String (t.out (3), 4) + ")");
 
-    // Per-source levels: In 1 at -6 dB on Out 1 only; return at -6 dB into Out 4's mix.
-    p1.levelsDb[0][0] = -6.0206f;
-    engine.applyBusConfig (0);
+    // Per-source levels
+    p1.levelsDb[0][in1] = -6.0206f;
+    engine.applyBusConfig (bridge::busIndex (0, 0));
     p2.routes[1][bridge::returnSource] = true;
     p2.levelsDb[1][bridge::returnSource] = -6.0206f;
-    engine.applyBusConfig (1);
+    engine.applyBusConfig (bridge::busIndex (0, 1));
     run();
-    check (near (out (0), 0.55f),   "per-source level: In 1 at -6 dB into Out 1 (" + juce::String (out (0), 4) + ")");
-    check (near (out (3), 0.14375f), "per-source level: return at -6 dB into Out 4, then Out 4 at -6 dB (" + juce::String (out (3), 4) + ")");
-    p1.levelsDb[0][0] = 0.0f;
+    check (near (t.out (0), 0.55f),    "per-source level: In 1 at -6 dB into Out 1 (" + juce::String (t.out (0), 4) + ")");
+    check (near (t.out (3), 0.14375f), "per-source level: return at -6 dB into Out 4, then Out 4 at -6 dB (" + juce::String (t.out (3), 4) + ")");
+    p1.levelsDb[0][in1] = 0.0f;
     p2.routes[1][bridge::returnSource] = false;
-    engine.applyBusConfig (0);
-    engine.applyBusConfig (1);
+    engine.applyBusConfig (bridge::busIndex (0, 0));
+    engine.applyBusConfig (bridge::busIndex (0, 1));
+
+    // Across interfaces: Scarlett In 1 into TASCAM Out 1 (right side); TASCAM In 2 into the Scarlett's phones.
+    p1.routes[1][scIn1] = true;
+    engine.applyBusConfig (bridge::busIndex (0, 0));
+    p3.routes[0][in2] = p3.routes[1][in2] = true;
+    p3.routes[0][bridge::returnSource] = p3.routes[1][bridge::returnSource] = true;
+    engine.applyBusConfig (bridge::busIndex (1, 0));
+    run();
+    check (near (t.out (1), 0.55f),  "cross-interface: Scarlett In 1 heard on TASCAM Out 2 (" + juce::String (t.out (1), 4) + ")");
+    check (near (sc.out (0), 0.7f),  "cross-interface: TASCAM In 2 + return L on Scarlett Out 1 (" + juce::String (sc.out (0), 4) + ")");
+    check (near (sc.out (1), 0.45f), "cross-interface: TASCAM In 2 + return R on Scarlett Out 2 (" + juce::String (sc.out (1), 4) + ")");
+    p1.routes[1][scIn1] = false;
+    engine.applyBusConfig (bridge::busIndex (0, 0));
 
     // Same routes, pair 1 switched to 2x MONO: the return folds to mono on Out 2.
     p1.stereo = false;
-    engine.applyBusConfig (0);
+    engine.applyBusConfig (bridge::busIndex (0, 0));
     run();
-    check (near (out (1), 0.375f), "pair switched to 2x mono: Out 2 = mono return (" + juce::String (out (1), 4) + ")");
-    check (near (out (0), 0.475f), "pair switched to 2x mono: Out 1 = In 1 + mono return (" + juce::String (out (0), 4) + ")");
+    check (near (t.out (1), 0.375f), "pair switched to 2x mono: Out 2 = mono return (" + juce::String (t.out (1), 4) + ")");
+    check (near (t.out (0), 0.475f), "pair switched to 2x mono: Out 1 = In 1 + mono return (" + juce::String (t.out (0), 4) + ")");
 
-    cb.audioDeviceStopped();
+    cb0.audioDeviceStopped();
+    cb1.audioDeviceStopped();
 }
 
 void ndiLoopback()
@@ -262,7 +319,9 @@ void ndiLoopback()
         DriftFifo fifo;
         fifo.setConsumerSampleRate (48000.0);
         fifo.setTargetLatencyMs (60.0);
-        NdiReceiver receiver (fifo);
+        NdiReceiver receiver;
+        receiver.onAudio = [&fifo] (const float* l, const float* r, int n, double rate) { fifo.push (l, r, n, rate); };
+        receiver.onReset = [&fifo] { fifo.requestReset(); };
 
         const auto uniqueName = "NDIAB SelfTest " + juce::String (juce::Random::getSystemRandom().nextInt (99999));
         hub.setName (0, uniqueName);

@@ -13,22 +13,19 @@ public:
 
     void initialise (const juce::String&) override
     {
-        lookAndFeel.setColourScheme ({ 0xff111317, 0xff1a1d23, 0xff1a1d23,
-                                       0xff2a2f38, 0xffe7e9ec, 0xff2f7cf6,
-                                       0xffffffff, 0xff2f7cf6, 0xffe7e9ec });
-        lookAndFeel.setColour (juce::TooltipWindow::backgroundColourId, juce::Colour (0xff23272f));
-        juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
+        ui::setDark (Settings::isDarkTheme());
+        lookAndFeel = std::make_unique<ui::LookAndFeel>();
+        juce::LookAndFeel::setDefaultLookAndFeel (lookAndFeel.get());
 
         engine = std::make_unique<AudioEngine>();
-        Settings::restoreConfig (*engine);
-
-        auto interfaceState = Settings::getSavedInterfaceState();
-        engine->startup (interfaceState.get());
+        Settings::restore (*engine);
+        engine->startup();
+        engine->addDefaultInterfaceIfNone();
 
         if (auto computer = Settings::getSavedComputerDevice(); computer.isNotEmpty())
             engine->openComputerAudioDevice (computer);
 
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine);
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), *engine, *lookAndFeel);
     }
 
     void shutdown() override
@@ -39,6 +36,7 @@ public:
         mainWindow.reset();
         engine.reset(); // stops audio, NDI threads, then unloads NDI
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
+        lookAndFeel.reset();
     }
 
     void systemRequestedQuit() override { quit(); }
@@ -46,14 +44,14 @@ public:
 private:
     struct MainWindow : public juce::DocumentWindow
     {
-        MainWindow (const juce::String& name, AudioEngine& audioEngine)
-            : DocumentWindow (name, juce::Colour (0xff111317), DocumentWindow::allButtons)
+        MainWindow (const juce::String& name, AudioEngine& audioEngine, ui::LookAndFeel& laf)
+            : DocumentWindow (name, ui::pal().bg, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            content = new MainComponent (audioEngine);
+            content = new MainComponent (audioEngine, laf);
             setContentOwned (content, true);
             setResizable (true, true);
-            setResizeLimits (1100, 720, 3000, 2000);
+            setResizeLimits (1100, 700, 3000, 2000);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
         }
@@ -66,7 +64,7 @@ private:
         MainComponent* content = nullptr; // owned by the window
     };
 
-    juce::LookAndFeel_V4 lookAndFeel;
+    std::unique_ptr<ui::LookAndFeel> lookAndFeel;
     std::unique_ptr<AudioEngine> engine;
     std::unique_ptr<MainWindow> mainWindow;
 };

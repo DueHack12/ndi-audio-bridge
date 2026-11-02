@@ -1,19 +1,15 @@
 #pragma once
 
-#include "engine/AudioEngine.h"
-
-#include <juce_audio_utils/juce_audio_utils.h>
-#include <juce_gui_basics/juce_gui_basics.h>
-
-class LevelMeter;
-class SendRow;
-class MatrixPanel;
+#include "Pages.h"
+#include "RoutingPage.h"
+#include "Sidebar.h"
+#include "engine/SystemMonitor.h"
 
 class MainComponent : public juce::Component,
                       private juce::Timer
 {
 public:
-    explicit MainComponent (AudioEngine&);
+    MainComponent (AudioEngine&, ui::LookAndFeel&);
     ~MainComponent() override;
 
     void paint (juce::Graphics&) override;
@@ -24,48 +20,29 @@ public:
 
 private:
     void timerCallback() override;
-
+    void showPage (ui::Sidebar::Page);
+    void setTheme (bool dark);
     void markDirty();
-    void rebuildForDevice();
-    void sourceNamesChanged();
-    void showInterfaceSettings();
-    void refreshReturnSources (bool force);
-    void refreshComputerDevices();
-    void updateStatusText();
+    void rebuildAll();
+    void updateResources();
 
     AudioEngine& engine;
+    ui::LookAndFeel& lookAndFeel;
     juce::TooltipWindow tooltipWindow { this, 600 };
 
-    // Header
-    juce::TextButton interfaceButton { "Audio Interface..." };
-    juce::Label interfaceSummary;
+    ui::Sidebar sidebar;
+    ui::RoutingPage routingPage;
+    ui::InterfacesPage interfacesPage;
+    ui::SettingsPage settingsPage;
+    ui::Sidebar::Page page = ui::Sidebar::Page::routing;
 
-    // Send panel (one row per interface input + computer audio)
-    juce::Viewport sendViewport;
-    juce::Component sendRowsHolder;
-    juce::OwnedArray<SendRow> sendRows;
-
-    // vMix return panel
-    juce::ComboBox returnCombo;
-    juce::Slider returnGain, returnBuffer;
-    std::unique_ptr<LevelMeter> returnMeter;
-    juce::Label returnStatus, returnBufferLabel;
-    int lastFinderChange = -1;
-
-    // Computer audio panel
-    juce::ComboBox computerCombo;
-    juce::TextButton computerRescan { "Rescan" };
-    juce::Slider computerBuffer;
-    juce::Label computerStatus, computerHint, computerBufferLabel;
-
-    // Headphone matrix
-    std::unique_ptr<MatrixPanel> matrix;
-
-    // Layout + state
-    juce::Rectangle<int> sendArea, sendHeadingRow, returnArea, computerArea, matrixArea, headerArea;
-    int builtInputs = -1, builtBuses = -1;
+    ui::Levels levels;
+    SystemMonitor monitor;
+    int lastStructure = -1;
     bool dirty = false;
-    juce::uint32 lastChangeMs = 0, lastComputerRetryMs = 0;
+    juce::uint32 lastChangeMs = 0, lastSecondMs = 0, lastRetryMs = 0;
+    juce::uint64 lastSentBytes = 0, lastReceivedBytes = 0;
+    double lastNdiTime = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
