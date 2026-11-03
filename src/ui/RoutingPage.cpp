@@ -160,7 +160,8 @@ void RoutingPage::layoutHeader()
 
     for (int i = 0; i < bridge::maxInterfaces; ++i)
         if (engine.isInterfaceUsed (i))
-            add (RoutingModel::shortDevice (engine, i), engine.isInterfaceRunning (i) ? 2 : 3);
+            add (engine.hasInput (i) ? RoutingModel::shortInputDevice (engine, i) : RoutingModel::shortOutputDevice (engine, i),
+                 engine.isInterfaceRunning (i) ? 2 : 3);
 
     int x = headerArea.getX() + 24 + 90 + 8;
     for (auto& c : chips)

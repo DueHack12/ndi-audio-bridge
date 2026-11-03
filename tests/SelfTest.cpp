@@ -488,6 +488,77 @@ void companionControl()
     check (clean, "this machine: " + (here.isEmpty() ? juce::String ("no network") : here.joinIntoString (", ")));
 }
 
+void separateDevices()
+{
+    std::printf ("Separate input and output devices\n");
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    AudioEngine engine;
+    using namespace bridge;
+
+    const int tascam = engine.addInput ("Test", "TASCAM");
+    check (tascam >= 0 && engine.addOutput ("Test", "TASCAM") == tascam && engine.hasInput (tascam) && engine.hasOutput (tascam),
+           "a device's input and output share one slot (one clock)");
+    const int speakers = engine.addOutput ("Test", "Speakers");
+    check (speakers >= 0 && speakers != tascam && ! engine.hasInput (speakers), "speakers get their own output-only slot");
+    check (engine.addInput ("Test", "TASCAM") < 0 && engine.addOutput ("Test", "Speakers") < 0, "a device can't be added twice in the same direction");
+
+    // TASCAM In 2: named, coughed, in the speakers at -6 dB and in the TASCAM's Out 2
+    const int in2 = sourceIndex (tascam, 1);
+    engine.getSourceConfig (in2).name = "Announcer 2";
+    engine.getSourceConfig (in2).sendMuted = true;
+    auto& spk = engine.getBusConfig (busIndex (speakers, 0));
+    spk.routes[0][in2] = true;
+    spk.levelsDb[0][in2] = -6.0f;
+    engine.getBusConfig (busIndex (tascam, 0)).routes[1][in2] = true;
+    engine.getBusConfig (busIndex (tascam, 0)).name = "Host Phones";
+
+    // inputs move to a USB mic interface; the TASCAM keeps its outputs
+    const int usb = engine.setInputDevice (tascam, "Test", "USB Mic");
+    const int moved = sourceIndex (usb, 1);
+    check (usb >= 0 && usb != tascam && engine.hasInput (usb) && ! engine.hasOutput (usb) && ! engine.hasInput (tascam) && engine.hasOutput (tascam),
+           "switching the input device splits it off; the TASCAM keeps its outputs");
+    check (engine.getSourceConfig (moved).name == "Announcer 2" && engine.getSourceConfig (moved).sendMuted,
+           "name and cough go with the input");
+    check (spk.routes[0][moved] && std::abs (spk.levelsDb[0][moved] + 6.0f) < 1.0e-6f && ! spk.routes[0][in2],
+           "routing and levels go with the input");
+    check (engine.getBusConfig (busIndex (tascam, 0)).routes[1][moved] && engine.getBusConfig (busIndex (tascam, 0)).name == "Host Phones",
+           "the TASCAM's headphone mix stays and still hears it");
+
+    // and back onto the TASCAM: one slot again
+    const int back = engine.setInputDevice (usb, "Test", "TASCAM");
+    check (back == tascam && ! engine.isInterfaceUsed (usb) && engine.hasInput (tascam) && engine.hasOutput (tascam)
+               && spk.routes[0][in2] && engine.getSourceConfig (in2).name == "Announcer 2",
+           "moving it back rejoins the TASCAM's slot with its routing");
+
+    engine.removeOutput (tascam);
+    check (engine.hasInput (tascam) && ! engine.hasOutput (tascam) && engine.getSourceConfig (in2).name == "Announcer 2",
+           "removing a device's outputs keeps its inputs");
+    engine.removeInput (tascam);
+    check (! engine.isInterfaceUsed (tascam), "removing its inputs too frees the slot");
+
+    // settings from 0.4: one slot with a mic interface in and speakers out
+    InterfaceConfig mixed;
+    mixed.typeName = "Test";
+    mixed.inputName = "Mic Interface";
+    mixed.outputName = "Desk Speakers";
+    const int old = 5;
+    engine.setInterfaceConfig (old, mixed);
+    engine.getBusConfig (busIndex (old, 0)).name = "Monitor";
+    engine.getBusConfig (busIndex (old, 0)).routes[0][sourceIndex (old, 0)] = true;
+    engine.splitMixedSlots();
+    int split = -1;
+    for (int i = 0; i < maxInterfaces; ++i)
+        if (engine.isInterfaceUsed (i) && engine.getInterfaceConfig (i).outputName == "Desk Speakers")
+            split = i;
+    check (split >= 0 && split != old && engine.hasInput (old) && ! engine.hasOutput (old) && ! engine.hasInput (split)
+               && engine.getBusConfig (busIndex (split, 0)).name == "Monitor"
+               && engine.getBusConfig (busIndex (split, 0)).routes[0][sourceIndex (old, 0)],
+           "an old mixed slot is split into an input device and an output device, mixes kept");
+    check (engine.getSourceKey (sourceIndex (old, 0)) == "Mic Interface#0" && engine.getBusKey (busIndex (split, 0)) == "Desk Speakers#out0"
+               && engine.findSourceByKey ("Mic Interface#0") == sourceIndex (old, 0) && engine.findBusByKey ("Desk Speakers#out0") == busIndex (split, 0),
+           "inputs are saved under the input device, mixes under the output device");
+}
+
 void ndiLoopback()
 {
     std::printf ("NDI loopback\n");
@@ -601,6 +672,7 @@ int main()
 
     routingMatrix();
     companionControl();
+    separateDevices();
     ndiLoopback();
 
     std::printf ("\n%s (%d failure%s)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures, failures == 1 ? "" : "s");

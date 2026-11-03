@@ -11,14 +11,14 @@
 
 namespace bridge
 {
-constexpr int maxInterfaces = 4;
+constexpr int maxInterfaces = 8;                                         // device slots (an input, an output, or both)
 constexpr int maxInsPerInterface = 16;
 constexpr int maxPairsPerInterface = 8;                                   // 16 outputs
-constexpr int computerSource = maxInterfaces * maxInsPerInterface;       // 64
-constexpr int returnSource = computerSource + 1;                         // 65
-constexpr int numSources = returnSource + 1;                             // 66
-constexpr int numBuses = maxInterfaces * maxPairsPerInterface;           // 32 output pairs
-constexpr int numOutChannels = numBuses * 2;                             // 64
+constexpr int computerSource = maxInterfaces * maxInsPerInterface;       // 128
+constexpr int returnSource = computerSource + 1;                         // 129
+constexpr int numSources = returnSource + 1;                             // 130
+constexpr int numBuses = maxInterfaces * maxPairsPerInterface;           // 64 output pairs
+constexpr int numOutChannels = numBuses * 2;                             // 128
 
 constexpr int sourceIndex (int iface, int ch) noexcept   { return iface * maxInsPerInterface + ch; }
 constexpr int interfaceOfSource (int s) noexcept         { return s < computerSource ? s / maxInsPerInterface : -1; }
@@ -63,7 +63,8 @@ struct BusConfig
     float levelsDb[2][numSources] {};      // per-source level into each output (0 dB default)
 };
 
-/** Which device an interface slot uses. */
+/** Which device(s) a slot uses: an input device, an output device, or both when they are
+    the same hardware (then they share one clock and one callback: lowest latency). */
 struct InterfaceConfig
 {
     juce::String typeName, inputName, outputName;
@@ -117,7 +118,28 @@ public:
     bool isInterfaceRunning (int slot) const noexcept;
     const bridge::InterfaceConfig& getInterfaceConfig (int slot) const;
     juce::String getInterfaceName (int slot) const;
-    juce::String getInterfaceStatus (int slot) const;
+
+    // ---------------------------------------------------------------- inputs and outputs as separate devices
+    // An input and an output on the same device (same driver and name) share one slot, so audio
+    // between them needs no clock bridge. Anything else gets its own slot and clock.
+    bool hasInput (int slot) const noexcept;
+    bool hasOutput (int slot) const noexcept;
+    juce::String getInputDeviceName (int slot) const;
+    juce::String getOutputDeviceName (int slot) const;
+    /** Returns the slot used, or -1 when all slots are taken or that device is already an input. */
+    int addInput (const juce::String& typeName, const juce::String& deviceName);
+    int addOutput (const juce::String& typeName, const juce::String& deviceName);
+    /** Moves a slot's input to another device. Names, cough, routing and levels go with it.
+        Returns the slot it ends up in, or -1 if that device is already used as an input. */
+    int setInputDevice (int slot, const juce::String& typeName, const juce::String& deviceName);
+    int setOutputDevice (int slot, const juce::String& typeName, const juce::String& deviceName);
+    void removeInput (int slot);
+    void removeOutput (int slot);
+    /** Older versions could pair an input and an output of different devices in one slot;
+        splits those into two slots. Call after Settings::restore, before startup. */
+    void splitMixedSlots();
+    /** "48.0 kHz · 128 samples · 4 in / 4 out", or why it isn't running. direction: 0 both, 1 inputs, 2 outputs. */
+    juce::String getInterfaceStatus (int slot, int direction = 0) const;
     int getNumInputs (int slot) const noexcept;
     int getNumOutputs (int slot) const noexcept;
     int getNumPairs (int slot) const noexcept { return (getNumOutputs (slot) + 1) / 2; }
@@ -192,6 +214,13 @@ private:
     void fanOut (int source, const float* l, const float* r, int n, double rate, int skipSlot) noexcept;
     void openSendsForSlot (int slot);
     void resetSlotDefaults (int slot);
+    void resetInputDefaults (int slot);
+    void resetOutputDefaults (int slot);
+    int findFreeSlot() const;
+    int findSlot (const juce::String& typeName, const juce::String& deviceName, bool input) const;
+    void moveInputs (int from, int to);
+    void moveOutputs (int from, int to);
+    void closeDevice (int slot);
 
     // Devices
     juce::AudioDeviceManager typeFactory;

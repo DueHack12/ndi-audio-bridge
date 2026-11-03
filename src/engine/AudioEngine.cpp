@@ -454,7 +454,7 @@ juce::String AudioEngine::getInterfaceName (int slot) const
     return key.isNotEmpty() ? key : "Interface " + juce::String (slot + 1);
 }
 
-juce::String AudioEngine::getInterfaceStatus (int slot) const
+juce::String AudioEngine::getInterfaceStatus (int slot, int direction) const
 {
     auto& it = *interfaces[(size_t) slot];
     if (! it.used)
@@ -466,9 +466,11 @@ juce::String AudioEngine::getInterfaceStatus (int slot) const
         if (last != 0 && juce::Time::getMillisecondCounter() - last > 1500)
             return "Not responding";
 
+        const auto counts = direction == 1 ? juce::String (it.numIns.load()) + (it.numIns.load() == 1 ? " input" : " inputs")
+                          : direction == 2 ? juce::String (it.numOuts.load()) + (it.numOuts.load() == 1 ? " output" : " outputs")
+                                           : juce::String (it.numIns.load()) + " in / " + juce::String (it.numOuts.load()) + " out";
         return juce::String (it.device->getCurrentSampleRate() / 1000.0, 1) + juce::String::fromUTF8 (" kHz · ")
-               + juce::String (it.device->getCurrentBufferSizeSamples()) + juce::String::fromUTF8 (" samples · ")
-               + juce::String (it.numIns.load()) + " in / " + juce::String (it.numOuts.load()) + " out";
+               + juce::String (it.device->getCurrentBufferSizeSamples()) + juce::String::fromUTF8 (" samples · ") + counts;
     }
 
     return it.status.isNotEmpty() ? it.status : juce::String ("Not connected");
@@ -484,13 +486,22 @@ void AudioEngine::setInterfaceConfig (int slot, const InterfaceConfig& cfg)
 
 void AudioEngine::resetSlotDefaults (int slot)
 {
+    resetInputDefaults (slot);
+    resetOutputDefaults (slot);
+}
+
+void AudioEngine::resetInputDefaults (int slot)
+{
     for (int ch = 0; ch < maxInsPerInterface; ++ch)
     {
         const int s = sourceIndex (slot, ch);
         sourceConfigs[(size_t) s] = {};
         sourceConfigs[(size_t) s].name = defaultSourceName (s);
     }
+}
 
+void AudioEngine::resetOutputDefaults (int slot)
+{
     for (int p = 0; p < maxPairsPerInterface; ++p)
     {
         auto& bc = busConfigs[(size_t) busIndex (slot, p)];
@@ -499,6 +510,354 @@ void AudioEngine::resetSlotDefaults (int slot)
         bc.nameRight = bc.name + " R";
         bc.routes[0][returnSource] = bc.routes[1][returnSource] = true;
     }
+}
+
+//==============================================================================
+bool AudioEngine::hasInput (int slot) const noexcept
+{
+    const auto& it = *interfaces[(size_t) slot];
+    return it.used && it.config.inputName.isNotEmpty();
+}
+
+bool AudioEngine::hasOutput (int slot) const noexcept
+{
+    const auto& it = *interfaces[(size_t) slot];
+    return it.used && it.config.outputName.isNotEmpty();
+}
+
+juce::String AudioEngine::getInputDeviceName (int slot) const
+{
+    const auto& n = interfaces[(size_t) slot]->config.inputName;
+    return n.isNotEmpty() ? n : getInterfaceName (slot);
+}
+
+juce::String AudioEngine::getOutputDeviceName (int slot) const
+{
+    const auto& n = interfaces[(size_t) slot]->config.outputName;
+    return n.isNotEmpty() ? n : getInterfaceName (slot);
+}
+
+int AudioEngine::findFreeSlot() const
+{
+    for (int i = 0; i < maxInterfaces; ++i)
+        if (! interfaces[(size_t) i]->used)
+            return i;
+    return -1;
+}
+
+int AudioEngine::findSlot (const juce::String& typeName, const juce::String& deviceName, bool input) const
+{
+    for (int i = 0; i < maxInterfaces; ++i)
+    {
+        const auto& it = *interfaces[(size_t) i];
+        if (it.used && it.config.typeName == typeName && (input ? it.config.inputName : it.config.outputName) == deviceName)
+            return i;
+    }
+    return -1;
+}
+
+void AudioEngine::closeDevice (int slot)
+{
+    auto& it = *interfaces[(size_t) slot];
+    if (it.device != nullptr)
+    {
+        it.running = false;
+        it.device->stop();
+        it.device->close();
+        it.device.reset();
+    }
+}
+
+void AudioEngine::moveInputs (int from, int to)
+{
+    for (int ch = 0; ch < maxInsPerInterface; ++ch)
+    {
+        const auto s = (size_t) sourceIndex (from, ch), t = (size_t) sourceIndex (to, ch);
+        sourceConfigs[t] = sourceConfigs[s];
+        for (auto& bc : busConfigs)
+        {
+            for (int side = 0; side < 2; ++side)
+            {
+                bc.routes[side][t] = bc.routes[side][s];
+                bc.levelsDb[side][t] = bc.levelsDb[side][s];
+                bc.routes[side][s] = false;
+            }
+        }
+        sendHub.getSlot ((int) s).enabled = false;
+    }
+
+    resetInputDefaults (from);
+    interfaces[(size_t) to]->config.maxIns = interfaces[(size_t) from]->config.maxIns;
+    interfaces[(size_t) to]->numIns = interfaces[(size_t) from]->numIns.load();
+    interfaces[(size_t) from]->numIns = 0;
+}
+
+void AudioEngine::moveOutputs (int from, int to)
+{
+    for (int p = 0; p < maxPairsPerInterface; ++p)
+        busConfigs[(size_t) busIndex (to, p)] = busConfigs[(size_t) busIndex (from, p)];
+
+    resetOutputDefaults (from);
+    interfaces[(size_t) to]->config.maxOuts = interfaces[(size_t) from]->config.maxOuts;
+    interfaces[(size_t) to]->numOuts = interfaces[(size_t) from]->numOuts.load();
+    interfaces[(size_t) from]->numOuts = 0;
+}
+
+int AudioEngine::addInput (const juce::String& typeName, const juce::String& deviceName)
+{
+    if (deviceName.isEmpty() || findSlot (typeName, deviceName, true) >= 0)
+        return -1;
+
+    // Same device already used as an output: join it (one clock, lowest latency).
+    int slot = findSlot (typeName, deviceName, false);
+    if (slot >= 0 && ! hasInput (slot))
+    {
+        resetInputDefaults (slot);
+        auto cfg = interfaces[(size_t) slot]->config;
+        cfg.inputName = deviceName;
+        cfg.maxIns = 0;
+        setInterfaceConfig (slot, cfg);
+        openInterface (slot);
+        return slot;
+    }
+
+    slot = findFreeSlot();
+    if (slot < 0)
+        return -1;
+
+    resetSlotDefaults (slot);
+    InterfaceConfig cfg;
+    cfg.typeName = typeName;
+    cfg.inputName = deviceName;
+    setInterfaceConfig (slot, cfg);
+    openInterface (slot);
+    return slot;
+}
+
+int AudioEngine::addOutput (const juce::String& typeName, const juce::String& deviceName)
+{
+    if (deviceName.isEmpty() || findSlot (typeName, deviceName, false) >= 0)
+        return -1;
+
+    int slot = findSlot (typeName, deviceName, true);
+    if (slot >= 0 && ! hasOutput (slot))
+    {
+        resetOutputDefaults (slot);
+        auto cfg = interfaces[(size_t) slot]->config;
+        cfg.outputName = deviceName;
+        cfg.maxOuts = 0;
+        setInterfaceConfig (slot, cfg);
+        openInterface (slot);
+        for (int b = 0; b < numBuses; ++b)
+            applyBusConfig (b);
+        return slot;
+    }
+
+    slot = findFreeSlot();
+    if (slot < 0)
+        return -1;
+
+    resetSlotDefaults (slot);
+    InterfaceConfig cfg;
+    cfg.typeName = typeName;
+    cfg.outputName = deviceName;
+    setInterfaceConfig (slot, cfg);
+    openInterface (slot);
+    return slot;
+}
+
+int AudioEngine::setInputDevice (int slot, const juce::String& typeName, const juce::String& deviceName)
+{
+    auto& it = *interfaces[(size_t) slot];
+    if (it.config.typeName == typeName && it.config.inputName == deviceName)
+        return slot;
+    if (deviceName.isEmpty() || findSlot (typeName, deviceName, true) >= 0)
+        return -1;
+
+    // An output-only slot on the new device: the input joins it.
+    int partner = findSlot (typeName, deviceName, false);
+    if (partner == slot || (partner >= 0 && hasInput (partner)))
+        partner = -1;
+
+    if (! hasOutput (slot) && partner < 0)
+    {
+        auto cfg = it.config;                    // input-only: just switch device
+        cfg.typeName = typeName;
+        cfg.inputName = deviceName;
+        setInterfaceConfig (slot, cfg);
+        openInterface (slot);
+        return slot;
+    }
+
+    const int dest = partner >= 0 ? partner : findFreeSlot();
+    if (dest < 0)
+        return slot;
+
+    if (partner < 0)
+    {
+        resetOutputDefaults (dest);
+        InterfaceConfig cfg;
+        cfg.typeName = typeName;
+        cfg.sampleRate = it.config.sampleRate;
+        cfg.bufferSize = it.config.bufferSize;
+        interfaces[(size_t) dest]->config = cfg;
+        interfaces[(size_t) dest]->used = true;
+    }
+
+    closeDevice (slot);
+    closeDevice (dest);
+    moveInputs (slot, dest);
+    interfaces[(size_t) dest]->config.inputName = deviceName;
+
+    if (hasOutput (slot))
+    {
+        it.config.inputName.clear();
+        it.config.maxIns = 0;
+        openInterface (slot);
+    }
+    else
+    {
+        removeInterface (slot);
+    }
+
+    openInterface (dest);
+    bumpStructure();
+    return dest;
+}
+
+int AudioEngine::setOutputDevice (int slot, const juce::String& typeName, const juce::String& deviceName)
+{
+    auto& it = *interfaces[(size_t) slot];
+    if (it.config.typeName == typeName && it.config.outputName == deviceName)
+        return slot;
+    if (deviceName.isEmpty() || findSlot (typeName, deviceName, false) >= 0)
+        return -1;
+
+    int partner = findSlot (typeName, deviceName, true);
+    if (partner == slot || (partner >= 0 && hasOutput (partner)))
+        partner = -1;
+
+    if (! hasInput (slot) && partner < 0)
+    {
+        auto cfg = it.config;
+        cfg.typeName = typeName;
+        cfg.outputName = deviceName;
+        setInterfaceConfig (slot, cfg);
+        openInterface (slot);
+        return slot;
+    }
+
+    const int dest = partner >= 0 ? partner : findFreeSlot();
+    if (dest < 0)
+        return slot;
+
+    if (partner < 0)
+    {
+        resetInputDefaults (dest);
+        InterfaceConfig cfg;
+        cfg.typeName = typeName;
+        cfg.sampleRate = it.config.sampleRate;
+        cfg.bufferSize = it.config.bufferSize;
+        interfaces[(size_t) dest]->config = cfg;
+        interfaces[(size_t) dest]->used = true;
+    }
+
+    closeDevice (slot);
+    closeDevice (dest);
+    moveOutputs (slot, dest);
+    interfaces[(size_t) dest]->config.outputName = deviceName;
+
+    if (hasInput (slot))
+    {
+        it.config.outputName.clear();
+        it.config.maxOuts = 0;
+        openInterface (slot);
+    }
+    else
+    {
+        removeInterface (slot);
+    }
+
+    openInterface (dest);
+    for (int b = 0; b < numBuses; ++b)
+        applyBusConfig (b);
+    bumpStructure();
+    return dest;
+}
+
+void AudioEngine::removeInput (int slot)
+{
+    if (! hasOutput (slot))
+    {
+        removeInterface (slot);
+        return;
+    }
+
+    auto& it = *interfaces[(size_t) slot];
+    closeDevice (slot);
+    for (int ch = 0; ch < maxInsPerInterface; ++ch)
+    {
+        const int s = sourceIndex (slot, ch);
+        sendHub.getSlot (s).enabled = false;
+        for (auto& bc : busConfigs)
+            bc.routes[0][s] = bc.routes[1][s] = false;
+    }
+    resetInputDefaults (slot);
+    it.config.inputName.clear();
+    it.config.maxIns = 0;
+    it.numIns = 0;
+    openInterface (slot);
+    for (int b = 0; b < numBuses; ++b)
+        applyBusConfig (b);
+    bumpStructure();
+}
+
+void AudioEngine::removeOutput (int slot)
+{
+    if (! hasInput (slot))
+    {
+        removeInterface (slot);
+        return;
+    }
+
+    auto& it = *interfaces[(size_t) slot];
+    closeDevice (slot);
+    resetOutputDefaults (slot);
+    it.config.outputName.clear();
+    it.config.maxOuts = 0;
+    it.numOuts = 0;
+    openInterface (slot);
+    for (int b = 0; b < numBuses; ++b)
+        applyBusConfig (b);
+    bumpStructure();
+}
+
+void AudioEngine::splitMixedSlots()
+{
+    for (int i = 0; i < maxInterfaces; ++i)
+    {
+        auto& it = *interfaces[(size_t) i];
+        if (! it.used || it.config.inputName.isEmpty() || it.config.outputName.isEmpty()
+            || it.config.inputName == it.config.outputName)
+            continue;
+
+        const int dest = findFreeSlot();
+        if (dest < 0)
+            return;
+
+        InterfaceConfig cfg;
+        cfg.typeName = it.config.typeName;
+        cfg.outputName = it.config.outputName;
+        cfg.sampleRate = it.config.sampleRate;
+        cfg.bufferSize = it.config.bufferSize;
+        resetInputDefaults (dest);
+        interfaces[(size_t) dest]->config = cfg;
+        interfaces[(size_t) dest]->used = true;
+        moveOutputs (i, dest);
+        it.config.outputName.clear();
+        it.config.maxOuts = 0;
+    }
+    bumpStructure();
 }
 
 int AudioEngine::addInterface (const InterfaceConfig& cfg)
@@ -550,14 +909,12 @@ void AudioEngine::addDefaultInterfaceIfNone()
     if (auto* t = findType (getDefaultDeviceTypeName()))
     {
         t->scanForDevices();
-        InterfaceConfig cfg;
-        cfg.typeName = t->getTypeName();
         const auto outs = t->getDeviceNames (false);
         const auto ins = t->getDeviceNames (true);
-        cfg.outputName = outs[juce::jmax (0, t->getDefaultDeviceIndex (false))];
-        cfg.inputName = ins[juce::jmax (0, t->getDefaultDeviceIndex (true))];
-        if (cfg.getKey().isNotEmpty())
-            addInterface (cfg);
+        if (ins.size() > 0)
+            addInput (t->getTypeName(), ins[juce::jmax (0, t->getDefaultDeviceIndex (true))]);
+        if (outs.size() > 0)
+            addOutput (t->getTypeName(), outs[juce::jmax (0, t->getDefaultDeviceIndex (false))]);
     }
 }
 
@@ -772,14 +1129,14 @@ juce::String AudioEngine::getSourceDeviceLabel (int s) const
 {
     if (s == computerSource) return "Computer audio";
     if (s == returnSource)   return "NDI return";
-    return getInterfaceName (interfaceOfSource (s)) + juce::String::fromUTF8 (" · IN ") + juce::String (channelOfSource (s) + 1);
+    return getInputDeviceName (interfaceOfSource (s)) + juce::String::fromUTF8 (" · IN ") + juce::String (channelOfSource (s) + 1);
 }
 
 juce::String AudioEngine::getSourceKey (int s) const
 {
     if (s == computerSource) return "computer";
     if (s == returnSource)   return "return";
-    return interfaces[(size_t) interfaceOfSource (s)]->config.getKey() + "#" + juce::String (channelOfSource (s));
+    return getInputDeviceName (interfaceOfSource (s)) + "#" + juce::String (channelOfSource (s));
 }
 
 int AudioEngine::findSourceByKey (const juce::String& key) const
@@ -790,9 +1147,15 @@ int AudioEngine::findSourceByKey (const juce::String& key) const
     const auto device = key.upToLastOccurrenceOf ("#", false, false);
     const int ch = key.fromLastOccurrenceOf ("#", false, false).getIntValue();
 
+    if (! juce::isPositiveAndBelow (ch, maxInsPerInterface))
+        return -1;
+
     for (int i = 0; i < maxInterfaces; ++i)
-        if (interfaces[(size_t) i]->used && interfaces[(size_t) i]->config.getKey() == device
-            && juce::isPositiveAndBelow (ch, maxInsPerInterface))
+        if (interfaces[(size_t) i]->used && interfaces[(size_t) i]->config.inputName == device)
+            return sourceIndex (i, ch);
+
+    for (int i = 0; i < maxInterfaces; ++i) // settings from before 0.5 keyed inputs by the output device
+        if (interfaces[(size_t) i]->used && interfaces[(size_t) i]->config.getKey() == device)
             return sourceIndex (i, ch);
 
     return -1;
@@ -846,7 +1209,7 @@ juce::String AudioEngine::getOutputLabel (int b, int side) const
 
 juce::String AudioEngine::getBusKey (int b) const
 {
-    return interfaces[(size_t) interfaceOfBus (b)]->config.getKey() + "#out" + juce::String (pairOfBus (b));
+    return getOutputDeviceName (interfaceOfBus (b)) + "#out" + juce::String (pairOfBus (b));
 }
 
 int AudioEngine::findBusByKey (const juce::String& key) const
@@ -854,9 +1217,15 @@ int AudioEngine::findBusByKey (const juce::String& key) const
     const auto device = key.upToLastOccurrenceOf ("#out", false, false);
     const int pair = key.fromLastOccurrenceOf ("#out", false, false).getIntValue();
 
+    if (! juce::isPositiveAndBelow (pair, maxPairsPerInterface))
+        return -1;
+
     for (int i = 0; i < maxInterfaces; ++i)
-        if (interfaces[(size_t) i]->used && interfaces[(size_t) i]->config.getKey() == device
-            && juce::isPositiveAndBelow (pair, maxPairsPerInterface))
+        if (interfaces[(size_t) i]->used && interfaces[(size_t) i]->config.outputName == device)
+            return busIndex (i, pair);
+
+    for (int i = 0; i < maxInterfaces; ++i)
+        if (interfaces[(size_t) i]->used && interfaces[(size_t) i]->config.getKey() == device)
             return busIndex (i, pair);
 
     return -1;

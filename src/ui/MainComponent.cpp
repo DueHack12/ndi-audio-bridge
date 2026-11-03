@@ -16,11 +16,7 @@ MainComponent::MainComponent (AudioEngine& e, RemoteControl& r, ui::LookAndFeel&
     sidebar.onExpandedChanged = [this] { resized(); };
 
     routingPage.onChanged = [this] { markDirty(); };
-    routingPage.onAddInterface = [this]
-    {
-        showPage (ui::Sidebar::Page::interfaces);
-        interfacesPage.addInterface();
-    };
+    routingPage.onAddInterface = [this] { showPage (ui::Sidebar::Page::interfaces); };
     interfacesPage.onChanged = [this] { markDirty(); rebuildAll(); };
     companionPage.onChanged = [this] { markDirty(); };
     companionPage.onSourceChanged = [this] { markDirty(); };

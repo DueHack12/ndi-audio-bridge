@@ -15,7 +15,7 @@
 class NdiSendHub : private juce::Thread
 {
 public:
-    static constexpr int maxSlots = 72;
+    static constexpr int maxSlots = 136; // >= bridge::numSources
 
     struct Slot
     {

@@ -54,7 +54,7 @@ public:
         fader.setAlpha (on ? 1.0f : 0.5f);
         name = e.getSourceConfig (source).name;
         device = source >= bridge::computerSource ? e.getSourceDeviceLabel (source)
-                                                   : RoutingModel::shortDevice (e, bridge::interfaceOfSource (source)) + juce::String::fromUTF8 (" · ") + RoutingModel::sourceTag (source);
+                                                   : RoutingModel::shortInputDevice (e, bridge::interfaceOfSource (source)) + juce::String::fromUTF8 (" · ") + RoutingModel::sourceTag (source);
         resized();
         repaint();
     }
@@ -348,7 +348,7 @@ void MixerPanel::paint (juce::Graphics& g)
     {
         g.setColour (p.dim);
         g.setFont (font (14.0f));
-        g.drawText ("No headphone outputs yet. Add an audio interface with outputs.", getLocalBounds(), juce::Justification::centred);
+        g.drawText ("No headphone outputs yet. Add an output device on Inputs & outputs.", getLocalBounds(), juce::Justification::centred);
         return;
     }
 

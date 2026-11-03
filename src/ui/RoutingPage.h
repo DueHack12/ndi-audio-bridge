@@ -39,7 +39,7 @@ private:
     PatchView patch;
     MixerPanel mixer;
     SourceInspector inspector;
-    FlatButton addInterfaceButton { "Add interface", FlatButton::Kind::ghost };
+    FlatButton addInterfaceButton { "Add device", FlatButton::Kind::ghost };
 
     std::vector<int> sources;
     std::vector<MixRef> mixes;

@@ -1,3 +1,11 @@
+## What's new in 0.5.0
+
+- **Inputs and outputs are picked separately.** The *Interfaces* page is now **Inputs & outputs**: input devices (sent to vMix over NDI) on the left, output devices (headphone mixes, speakers) on the right. Use a USB mic interface as an input and the computer's speakers as an output, add or remove either on its own.
+- An input and an output on the **same** device (like the TASCAM) still share one clock, so its headphones hear its mics with no extra delay. Pick a different device and it runs on its own clock, bridged automatically.
+- Switching a device keeps everything attached to it: mic names, cough, routing and levels move with an input; mixes move with an output.
+- Up to eight devices (was four).
+- Setups from 0.4 that paired one device's inputs with another device's outputs are split into an input device and an output device on first launch, with all mixes kept.
+
 ## What's new in 0.4.2
 
 - **Companion page** shows exactly what the buttons receive: `live 0` / `live 1` next to every mic, and a *Feedback* row with where feedback goes and when it was last sent. The setup steps explain when `live` is 1 (not coughed **and** vMix has the source as an input) and how to test without vMix (use the `cough` path).
@@ -42,11 +50,11 @@
 2. Unzip, then clear the download flag (these builds aren't notarized):
    `xattr -dr com.apple.quarantine ~/Downloads/"NDI Audio Bridge"`
 3. Double-click **Install Virtual Audio Device.command**, then set System Settings › Sound › Output to **NDI Audio Bridge**.
-4. Open the app and allow Microphone and Local Network. The TASCAM is picked automatically (see **Interfaces** in the sidebar). Click **Computer Audio** and choose **NDI Audio Bridge** under *Plays from*.
+4. Open the app and allow Microphone and Local Network. The TASCAM is picked automatically (see **Inputs & outputs** in the sidebar). Click **Computer Audio** and choose **NDI Audio Bridge** under *Plays from*.
 
 **Windows**
 1. Install NDI Tools (https://ndi.video/tools/), the TASCAM ASIO driver, and VB-Audio Virtual Cable.
-2. Set Windows' output to **CABLE Input** and run the app. Under **Interfaces**, choose the TASCAM with the **ASIO** driver. Click **Computer Audio** and choose **CABLE Output** under *Plays from*.
+2. Set Windows' output to **CABLE Input** and run the app. Under **Inputs & outputs**, choose the TASCAM (input and output) with the **ASIO** driver. Click **Computer Audio** and choose **CABLE Output** under *Plays from*.
 
 Turn the TASCAM's **MONITOR MIX** knob fully to **COMPUTER** so the headphones only hear the app's mixes.
 Full setup, vMix configuration and troubleshooting: see the [README](https://github.com/DueHack12/ndi-audio-bridge#readme).

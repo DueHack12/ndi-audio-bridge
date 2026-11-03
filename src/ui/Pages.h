@@ -5,7 +5,8 @@
 
 namespace ui
 {
-/** Add, remove and configure audio interfaces (up to four). */
+/** Input devices (sent to vMix) and output devices (headphones, speakers) side by side.
+    Each can be any device; an input and an output on the same device share one clock. */
 class InterfacesPage : public juce::Component
 {
 public:
@@ -14,7 +15,7 @@ public:
 
     void rebuild();
     void tick();
-    void addInterface();
+    void addDevice (bool input);
 
     std::function<void()> onChanged;
 
@@ -23,12 +24,16 @@ public:
 
 private:
     class Card;
+    void changedLater();
+
     AudioEngine& engine;
     juce::Viewport viewport;
     juce::Component holder;
-    juce::OwnedArray<Card> cards;
-    FlatButton addButton { "Add audio interface", FlatButton::Kind::ghost };
+    juce::OwnedArray<Card> inputCards, outputCards;
+    FlatButton addInputButton { "Add input device", FlatButton::Kind::ghost };
+    FlatButton addOutputButton { "Add output device", FlatButton::Kind::ghost };
     FlatButton rescanButton { "Rescan devices" };
+    std::vector<std::pair<juce::String, juce::Rectangle<int>>> headings, notes;
 };
 
 /** Theme, buffers, NDI status, about. */

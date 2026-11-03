@@ -168,6 +168,9 @@ void restore (AudioEngine& engine)
     engine.setReturnBufferMs (xml->getDoubleAttribute ("returnBufferMs", engine.getReturnBufferMs()));
     engine.setComputerBufferMs (xml->getDoubleAttribute ("computerBufferMs", engine.getComputerBufferMs()));
     engine.setCrossBufferMs (xml->getDoubleAttribute ("crossBufferMs", engine.getCrossBufferMs()));
+
+    // 0.4 and earlier could pair one device's inputs with another device's outputs: split those.
+    engine.splitMixedSlots();
 }
 
 void save (AudioEngine& engine)

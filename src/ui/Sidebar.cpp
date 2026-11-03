@@ -9,7 +9,7 @@ namespace
 struct NavItem { const char* label; Icon icon; Sidebar::Page page; };
 const NavItem navItems[] = {
     { "Routing", Icon::routing, Sidebar::Page::routing },
-    { "Interfaces", Icon::interfaces, Sidebar::Page::interfaces },
+    { "Inputs & outputs", Icon::interfaces, Sidebar::Page::interfaces },
     { "Companion", Icon::companion, Sidebar::Page::companion },
     { "Settings", Icon::settings, Sidebar::Page::settings },
 };

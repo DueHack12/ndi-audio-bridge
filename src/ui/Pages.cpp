@@ -5,69 +5,62 @@
 namespace ui
 {
 //==============================================================================
+/** One input device or one output device. */
 class InterfacesPage::Card : public juce::Component
 {
 public:
-    Card (InterfacesPage& o, int s) : owner (o), engine (o.engine), slot (s)
+    Card (InterfacesPage& o, int s, bool isInput) : owner (o), engine (o.engine), slot (s), input (isInput)
     {
-        for (auto* box : { &typeBox, &inBox, &outBox, &rateBox, &bufferBox, &insUsedBox, &outsUsedBox })
+        for (auto* box : { &typeBox, &deviceBox, &rateBox, &bufferBox, &usedBox })
             addAndMakeVisible (box);
-
-        insUsedBox.onChange = [this]
-        {
-            auto cfg = engine.getInterfaceConfig (slot);
-            cfg.maxIns = insUsedBox.getSelectedId() <= 1 ? 0 : insUsedBox.getSelectedId() - 1;
-            apply (cfg);
-        };
-        outsUsedBox.onChange = [this]
-        {
-            auto cfg = engine.getInterfaceConfig (slot);
-            cfg.maxOuts = outsUsedBox.getSelectedId() <= 1 ? 0 : (outsUsedBox.getSelectedId() - 1);
-            apply (cfg);
-        };
 
         typeBox.onChange = [this]
         {
-            auto cfg = engine.getInterfaceConfig (slot);
-            cfg.typeName = typeBox.getText();
-            const auto outs = engine.getDeviceNames (cfg.typeName, false, true);
-            const auto ins = engine.getDeviceNames (cfg.typeName, true);
-            if (! outs.contains (cfg.outputName)) cfg.outputName = outs[0];
-            if (! ins.contains (cfg.inputName))   cfg.inputName = ins.contains (cfg.outputName) ? cfg.outputName : ins[0];
-            apply (cfg);
+            const auto type = typeBox.getText();
+            const auto names = engine.getDeviceNames (type, input, true);
+            const auto current = input ? engine.getInputDeviceName (slot) : engine.getOutputDeviceName (slot);
+            juce::String pick = names.contains (current) ? current : juce::String();
+            for (auto& n : names)
+                if (pick.isEmpty() && ! inUse (type, n))
+                    pick = n;
+            switchTo (type, pick);
         };
-        inBox.onChange = [this]
+
+        deviceBox.onChange = [this]
         {
-            auto cfg = engine.getInterfaceConfig (slot);
-            cfg.inputName = inBox.getSelectedId() <= 1 ? juce::String() : inBox.getText();
-            apply (cfg);
+            const int index = deviceBox.getSelectedId() - 1;
+            if (juce::isPositiveAndBelow (index, deviceNames.size()))
+                switchTo (engine.getInterfaceConfig (slot).typeName, deviceNames[index]);
         };
-        outBox.onChange = [this]
-        {
-            auto cfg = engine.getInterfaceConfig (slot);
-            cfg.outputName = outBox.getSelectedId() <= 1 ? juce::String() : outBox.getText();
-            apply (cfg);
-        };
+
         rateBox.onChange = [this]
         {
             auto cfg = engine.getInterfaceConfig (slot);
             cfg.sampleRate = rateBox.getText().getDoubleValue();
-            apply (cfg);
+            reopen (cfg);
         };
         bufferBox.onChange = [this]
         {
             auto cfg = engine.getInterfaceConfig (slot);
             cfg.bufferSize = bufferBox.getText().getIntValue();
-            apply (cfg);
+            reopen (cfg);
+        };
+        usedBox.onChange = [this]
+        {
+            auto cfg = engine.getInterfaceConfig (slot);
+            (input ? cfg.maxIns : cfg.maxOuts) = usedBox.getSelectedId() <= 1 ? 0 : usedBox.getSelectedId() - 1;
+            reopen (cfg);
         };
 
+        removeButton.setTooltip (input ? "Stop using this device's inputs" : "Stop using this device's outputs");
         removeButton.onClick = [this]
         {
-            juce::MessageManager::callAsync ([&e = engine, slotIndex = slot, safeOwner = juce::Component::SafePointer<InterfacesPage> (&owner)]
+            juce::MessageManager::callAsync ([&e = engine, s = slot, in = input, safe = juce::Component::SafePointer<InterfacesPage> (&owner)]
             {
-                e.removeInterface (slotIndex);
-                if (safeOwner != nullptr && safeOwner->onChanged)
-                    safeOwner->onChanged();
+                if (in) e.removeInput (s);
+                else    e.removeOutput (s);
+                if (safe != nullptr)
+                    safe->changedLater();
             });
         };
         addAndMakeVisible (removeButton);
@@ -75,46 +68,63 @@ public:
         populate();
     }
 
+    int getSlot() const noexcept { return slot; }
+
     void populate()
     {
         const auto& cfg = engine.getInterfaceConfig (slot);
+        const auto current = input ? cfg.inputName : cfg.outputName;
 
-        auto fill = [] (juce::ComboBox& box, const juce::StringArray& items, const juce::String& current, const juce::String& none)
+        typeBox.clear (juce::dontSendNotification);
+        const auto types = engine.getDeviceTypeNames();
+        for (int i = 0; i < types.size(); ++i)
+            typeBox.addItem (types[i], i + 1);
+        typeBox.setSelectedId (types.indexOf (cfg.typeName) + 1, juce::dontSendNotification);
+
+        deviceNames = engine.getDeviceNames (cfg.typeName, input);
+        deviceBox.clear (juce::dontSendNotification);
+        for (int i = 0; i < deviceNames.size(); ++i)
+        {
+            const bool taken = deviceNames[i] != current && inUse (cfg.typeName, deviceNames[i]);
+            deviceBox.addItem (deviceNames[i] + (taken ? juce::String (input ? "  (already an input)" : "  (already an output)") : juce::String()), i + 1);
+            deviceBox.setItemEnabled (i + 1, ! taken);
+        }
+        if (deviceNames.contains (current))
+            deviceBox.setSelectedId (deviceNames.indexOf (current) + 1, juce::dontSendNotification);
+        else
+            deviceBox.setText (current + " (not connected)", juce::dontSendNotification);
+
+        auto fill = [] (juce::ComboBox& box, const juce::StringArray& items, const juce::String& selected)
         {
             box.clear (juce::dontSendNotification);
-            int id = 1;
-            if (none.isNotEmpty())
-                box.addItem (none, id++);
-            for (auto& i : items)
-                box.addItem (i, id++);
-            const int index = items.indexOf (current);
-            box.setSelectedId (index >= 0 ? index + (none.isNotEmpty() ? 2 : 1) : (none.isNotEmpty() ? 1 : 0), juce::dontSendNotification);
-            if (index < 0 && current.isNotEmpty())
-                box.setText (current + " (not connected)", juce::dontSendNotification);
+            for (int i = 0; i < items.size(); ++i)
+                box.addItem (items[i], i + 1);
+            if (items.contains (selected))
+                box.setSelectedId (items.indexOf (selected) + 1, juce::dontSendNotification);
+            else
+                box.setText (selected, juce::dontSendNotification);
         };
-
-        fill (typeBox, engine.getDeviceTypeNames(), cfg.typeName, {});
-        fill (inBox, engine.getDeviceNames (cfg.typeName, true), cfg.inputName, "(no inputs)");
-        fill (outBox, engine.getDeviceNames (cfg.typeName, false), cfg.outputName, "(no outputs)");
 
         juce::StringArray rates, sizes;
         for (auto r : engine.getSampleRates (slot)) rates.add (juce::String (juce::roundToInt (r)));
         for (auto b : engine.getBufferSizes (slot)) sizes.add (juce::String (b));
-        const auto currentRate = engine.isInterfaceRunning (slot) ? engine.getInterfaceSampleRate (slot) : cfg.sampleRate;
-        fill (rateBox, rates, juce::String (juce::roundToInt (currentRate)), {});
-        fill (bufferBox, sizes, juce::String (cfg.bufferSize), {});
+        const auto rate = engine.isInterfaceRunning (slot) ? engine.getInterfaceSampleRate (slot) : cfg.sampleRate;
+        fill (rateBox, rates, juce::String (juce::roundToInt (rate)));
+        fill (bufferBox, sizes, juce::String (cfg.bufferSize));
 
-        auto fillCount = [] (juce::ComboBox& box, int available, int cap, int current, const char* what)
-        {
-            box.clear (juce::dontSendNotification);
-            const int n = juce::jmin (available, cap);
-            box.addItem ("All " + juce::String (n) + " " + what, 1);
-            for (int i = 1; i <= n; ++i)
-                box.addItem (juce::String (i) + " " + what, i + 1);
-            box.setSelectedId (current > 0 && current <= n ? current + 1 : 1, juce::dontSendNotification);
-        };
-        fillCount (insUsedBox, engine.getDeviceInputCount (slot), bridge::maxInsPerInterface, cfg.maxIns, "inputs");
-        fillCount (outsUsedBox, engine.getDeviceOutputCount (slot), bridge::maxPairsPerInterface * 2, cfg.maxOuts, "outputs");
+        const int available = juce::jmin (input ? engine.getDeviceInputCount (slot) : engine.getDeviceOutputCount (slot),
+                                           input ? bridge::maxInsPerInterface : bridge::maxPairsPerInterface * 2);
+        const char* what = input ? "inputs" : "outputs";
+        const int used = input ? cfg.maxIns : cfg.maxOuts;
+        usedBox.clear (juce::dontSendNotification);
+        usedBox.addItem ("All " + juce::String (available) + " " + what, 1);
+        for (int i = 1; i <= available; ++i)
+            usedBox.addItem (juce::String (i) + " " + what, i + 1);
+        usedBox.setSelectedId (used > 0 && used <= available ? used + 1 : 1, juce::dontSendNotification);
+
+        shared = input ? engine.hasOutput (slot) : engine.hasInput (slot);
+        rateBox.setTooltip (shared ? "Shared with this device's " + juce::String (input ? "outputs" : "inputs") : juce::String());
+        bufferBox.setTooltip (rateBox.getTooltip());
         repaint();
     }
 
@@ -127,68 +137,108 @@ public:
         g.setColour (p.border);
         g.drawRoundedRectangle (r, 14.0f, 1.0f);
 
-        drawIcon (g, Icon::device, juce::Rectangle<float> (18.0f, 30.0f, 22.0f, 22.0f), p.dim);
+        drawIcon (g, input ? Icon::mic : Icon::speaker, juce::Rectangle<float> (18.0f, 18.0f, 22.0f, 22.0f), p.dim);
+
+        const int textW = removeButton.getX() - 60;
         g.setColour (p.text);
-        g.setFont (font (16.0f, true));
-        g.drawText (engine.getInterfaceName (slot), 50, 14, getWidth() - 200, 22, juce::Justification::centredLeft, true);
+        g.setFont (font (15.5f, true));
+        g.drawText (input ? engine.getInputDeviceName (slot) : engine.getOutputDeviceName (slot), 50, 12, textW, 22,
+                    juce::Justification::centredLeft, true);
 
         const bool running = engine.isInterfaceRunning (slot);
-        const auto status = engine.getInterfaceStatus (slot);
+        const auto status = engine.getInterfaceStatus (slot, input ? 1 : 2);
         g.setColour (running && status != "Not responding" ? p.green : p.danger);
-        g.fillEllipse (50.0f, 44.0f, 8.0f, 8.0f);
+        g.fillEllipse (50.0f, 40.0f, 8.0f, 8.0f);
         g.setColour (p.dim);
-        g.setFont (font (12.5f));
-        g.drawText (status, 64, 38, getWidth() - 200, 20, juce::Justification::centredLeft, true);
+        g.setFont (font (12.0f));
+        g.drawText (status, 64, 34, textW - 14, 20, juce::Justification::centredLeft, true);
 
         g.setFont (font (11.0f, true));
         for (auto& l : labels)
             g.drawText (l.first, l.second, juce::Justification::bottomLeft, false);
+
+        if (shared)
+        {
+            g.setFont (font (11.5f));
+            g.setColour (p.faint);
+            g.drawText (juce::String::fromUTF8 ("Same device as an ") + (input ? "output" : "input")
+                            + juce::String::fromUTF8 (": rate and buffer are shared, no extra latency between them"),
+                        sharedNote, juce::Justification::centredLeft, true);
+        }
     }
 
     void resized() override
     {
         labels.clear();
-        removeButton.setBounds (getWidth() - 110, 18, 92, 30);
+        removeButton.setBounds (getWidth() - 96, 16, 80, 28);
 
-        auto row = getLocalBounds().reduced (18, 0).withTrimmedTop (68).withHeight (52);
-        const int gap = 10;
-        const int w = row.getWidth();
-        const int cols[] = { (int) (w * 0.16f), (int) (w * 0.30f), (int) (w * 0.30f), (int) (w * 0.12f) };
-        juce::ComboBox* boxes[] = { &typeBox, &inBox, &outBox, &rateBox, &bufferBox };
-        const char* names[] = { "DRIVER", "INPUTS FROM", "OUTPUTS TO", "SAMPLE RATE", "BUFFER" };
+        const int x = 18, w = getWidth() - 36, gap = 10;
+        int y = 62;
+        const int typeW = juce::jmax (110, (int) (w * 0.32f));
+        labels.push_back ({ "DRIVER", { x, y, typeW, 16 } });
+        typeBox.setBounds (x, y + 20, typeW, 30);
+        labels.push_back ({ "DEVICE", { x + typeW + gap, y, w - typeW - gap, 16 } });
+        deviceBox.setBounds (x + typeW + gap, y + 20, w - typeW - gap, 30);
 
-        int x = row.getX();
-        for (int i = 0; i < 5; ++i)
-        {
-            const int cw = i < 4 ? cols[i] - gap : row.getRight() - x;
-            labels.push_back ({ names[i], { x, row.getY(), cw, 16 } });
-            boxes[i]->setBounds (x, row.getY() + 20, cw, 30);
-            x += cw + gap;
-        }
+        y += 60;
+        const int cw = (w - 2 * gap) / 3;
+        labels.push_back ({ "SAMPLE RATE", { x, y, cw, 16 } });
+        rateBox.setBounds (x, y + 20, cw, 30);
+        labels.push_back ({ "BUFFER", { x + cw + gap, y, cw, 16 } });
+        bufferBox.setBounds (x + cw + gap, y + 20, cw, 30);
+        labels.push_back ({ input ? "INPUTS USED" : "OUTPUTS USED", { x + 2 * (cw + gap), y, w - 2 * (cw + gap), 16 } });
+        usedBox.setBounds (x + 2 * (cw + gap), y + 20, w - 2 * (cw + gap), 30);
 
-        auto row2 = row.translated (0, 62);
-        labels.push_back ({ "INPUTS USED", { row2.getX(), row2.getY(), 200, 16 } });
-        insUsedBox.setBounds (row2.getX(), row2.getY() + 20, 200, 30);
-        labels.push_back ({ "OUTPUTS USED", { row2.getX() + 210, row2.getY(), 200, 16 } });
-        outsUsedBox.setBounds (row2.getX() + 210, row2.getY() + 20, 200, 30);
+        sharedNote = { x, y + 56, w, 18 };
     }
 
+    static int preferredHeight (bool sharedDevice) { return sharedDevice ? 206 : 186; }
+    bool isShared() const noexcept { return shared; }
+
 private:
-    void apply (bridge::InterfaceConfig cfg)
+    bool inUse (const juce::String& type, const juce::String& name) const
+    {
+        for (int i = 0; i < bridge::maxInterfaces; ++i)
+        {
+            const auto& c = engine.getInterfaceConfig (i);
+            if (engine.isInterfaceUsed (i) && c.typeName == type && (input ? c.inputName : c.outputName) == name)
+                return true;
+        }
+        return false;
+    }
+
+    void switchTo (const juce::String& type, const juce::String& name)
+    {
+        if (name.isEmpty())
+        {
+            populate();
+            return;
+        }
+
+        const int result = input ? engine.setInputDevice (slot, type, name) : engine.setOutputDevice (slot, type, name);
+        if (result < 0)
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "NDI Audio Bridge",
+                                                    name + " is already used as an " + (input ? "input." : "output."));
+        owner.changedLater();
+    }
+
+    void reopen (const bridge::InterfaceConfig& cfg)
     {
         engine.setInterfaceConfig (slot, cfg);
         engine.openInterface (slot);
-        populate();
-        if (owner.onChanged)
-            owner.onChanged();
+        owner.changedLater();
     }
 
     InterfacesPage& owner;
     AudioEngine& engine;
     const int slot;
-    juce::ComboBox typeBox, inBox, outBox, rateBox, bufferBox, insUsedBox, outsUsedBox;
+    const bool input;
+    bool shared = false;
+    juce::StringArray deviceNames;
+    juce::ComboBox typeBox, deviceBox, rateBox, bufferBox, usedBox;
     FlatButton removeButton { "Remove", FlatButton::Kind::normal };
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> labels;
+    juce::Rectangle<int> sharedNote;
 };
 
 //==============================================================================
@@ -198,20 +248,23 @@ InterfacesPage::InterfacesPage (AudioEngine& e) : engine (e)
     viewport.setScrollBarsShown (true, false);
     addAndMakeVisible (viewport);
 
-    addButton.setIcon (Icon::plus);
-    addButton.onClick = [this] { addInterface(); };
-    holder.addAndMakeVisible (addButton);
+    addInputButton.setIcon (Icon::plus);
+    addInputButton.onClick = [this] { addDevice (true); };
+    holder.addAndMakeVisible (addInputButton);
 
+    addOutputButton.setIcon (Icon::plus);
+    addOutputButton.onClick = [this] { addDevice (false); };
+    holder.addAndMakeVisible (addOutputButton);
+
+    rescanButton.setFontHeight (12.5f);
     rescanButton.onClick = [this]
     {
         for (auto& t : engine.getDeviceTypeNames())
             engine.getDeviceNames (t, true, true);
         engine.retryInterfaces();
-        for (auto* c : cards)
-            c->populate();
-        if (onChanged) onChanged();
+        changedLater();
     };
-    holder.addAndMakeVisible (rescanButton);
+    addAndMakeVisible (rescanButton);
 }
 
 InterfacesPage::~InterfacesPage()
@@ -219,51 +272,74 @@ InterfacesPage::~InterfacesPage()
     viewport.setViewedComponent (nullptr, false);
 }
 
+void InterfacesPage::changedLater()
+{
+    // Cards may be replaced (a device can move to another slot): never from inside their own callbacks.
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<InterfacesPage> (this)]
+    {
+        if (safe == nullptr)
+            return;
+        safe->rebuild();
+        if (safe->onChanged)
+            safe->onChanged();
+    });
+}
+
 void InterfacesPage::rebuild()
 {
-    cards.clear();
+    inputCards.clear();
+    outputCards.clear();
     for (int i = 0; i < bridge::maxInterfaces; ++i)
-        if (engine.isInterfaceUsed (i))
-            holder.addAndMakeVisible (cards.add (new Card (*this, i)));
+    {
+        if (engine.hasInput (i))
+            holder.addAndMakeVisible (inputCards.add (new Card (*this, i, true)));
+        if (engine.hasOutput (i))
+            holder.addAndMakeVisible (outputCards.add (new Card (*this, i, false)));
+    }
     resized();
     repaint();
 }
 
 void InterfacesPage::tick()
 {
-    for (auto* c : cards)
-        c->repaint (0, 30, c->getWidth(), 30);
+    for (auto* c : inputCards)
+        c->repaint (0, 30, c->getWidth(), 28);
+    for (auto* c : outputCards)
+        c->repaint (0, 30, c->getWidth(), 28);
 }
 
-void InterfacesPage::addInterface()
+void InterfacesPage::addDevice (bool input)
 {
-    juce::StringArray used;
-    for (int i = 0; i < bridge::maxInterfaces; ++i)
-        if (engine.isInterfaceUsed (i))
-            used.add (engine.getInterfaceConfig (i).getKey());
+    const auto type = engine.getDefaultDeviceTypeName();
+    const auto names = engine.getDeviceNames (type, input, true);
 
-    bridge::InterfaceConfig cfg;
-    cfg.typeName = engine.getDefaultDeviceTypeName();
-    const auto outs = engine.getDeviceNames (cfg.typeName, false, true);
-    const auto ins = engine.getDeviceNames (cfg.typeName, true);
+    juce::String pick;
+    for (auto& n : names)
+    {
+        bool used = false;
+        for (int i = 0; i < bridge::maxInterfaces; ++i)
+        {
+            const auto& c = engine.getInterfaceConfig (i);
+            used = used || (engine.isInterfaceUsed (i) && c.typeName == type && (input ? c.inputName : c.outputName) == n);
+        }
+        if (! used) { pick = n; break; }
+    }
 
-    for (auto& o : outs)
-        if (! used.contains (o)) { cfg.outputName = o; break; }
-    if (ins.contains (cfg.outputName))
-        cfg.inputName = cfg.outputName;
-    else
-        for (auto& i : ins)
-            if (! used.contains (i)) { cfg.inputName = i; break; }
-
-    if (engine.addInterface (cfg) < 0)
+    if (pick.isEmpty())
     {
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "NDI Audio Bridge",
-                                                "Up to " + juce::String (bridge::maxInterfaces) + " interfaces can be used at once.");
+                                                juce::String ("Every ") + (input ? "input" : "output") + " device is already in use.");
         return;
     }
 
-    if (onChanged)
-        onChanged();
+    if ((input ? engine.addInput (type, pick) : engine.addOutput (type, pick)) < 0)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "NDI Audio Bridge",
+                                                "Up to " + juce::String (bridge::maxInterfaces) + " devices can be used at once.");
+        return;
+    }
+
+    changedLater();
 }
 
 void InterfacesPage::paint (juce::Graphics& g)
@@ -272,28 +348,56 @@ void InterfacesPage::paint (juce::Graphics& g)
     g.fillAll (p.bg);
     g.setColour (p.text);
     g.setFont (font (22.0f, true));
-    g.drawText ("Audio interfaces", 32, 24, 400, 30, juce::Justification::centredLeft, false);
+    g.drawText ("Inputs & outputs", 32, 24, 400, 30, juce::Justification::centredLeft, false);
     g.setColour (p.dim);
     g.setFont (font (13.5f));
-    g.drawText ("Each interface runs on its own clock. Its inputs go straight out over NDI; mixes can use inputs from any interface.",
-                32, 56, getWidth() - 64, 20, juce::Justification::centredLeft, true);
+    g.drawText ("Pick any device for each. An input and an output on the same device share a clock, so headphones hear it with no extra delay.",
+                32, 56, rescanButton.getX() - 48, 20, juce::Justification::centredLeft, true);
+
+    for (auto& h : headings)
+    {
+        g.setColour (p.text);
+        g.setFont (font (12.0f, true));
+        g.drawText (h.first, h.second.withHeight (18), juce::Justification::centredLeft, false);
+    }
+    g.setColour (p.dim);
+    g.setFont (font (12.5f));
+    for (auto& n : notes)
+        g.drawText (n.first, n.second, juce::Justification::centredLeft, true);
 }
 
 void InterfacesPage::resized()
 {
-    viewport.setBounds (getLocalBounds().withTrimmedTop (90).reduced (32, 0));
-    const int w = viewport.getWidth() - 12;
-    int y = 0;
-    for (auto* c : cards)
+    rescanButton.setBounds (getWidth() - 32 - 140, 26, 140, 30);
+    viewport.setBounds (getLocalBounds().withTrimmedTop (140).reduced (32, 0));
+
+    const int w = viewport.getWidth() - 12, gap = 24;
+    const int colW = (w - gap) / 2;
+
+    headings.clear();
+    notes.clear();
+    headings.push_back ({ "INPUTS", { 32, 96, colW, 18 } });
+    notes.push_back ({ "Each input channel goes to vMix as its own NDI source", { 32, 114, colW, 18 } });
+    headings.push_back ({ "OUTPUTS", { 32 + colW + gap, 96, colW, 18 } });
+    notes.push_back ({ "Headphone mixes and speakers", { 32 + colW + gap, 114, colW, 18 } });
+
+    auto column = [&] (int x, juce::OwnedArray<Card>& cards, FlatButton& add)
     {
-        c->setBounds (0, y, w, 200);
-        y += 216;
-    }
-    addButton.setBounds (0, y, 220, 40);
-    rescanButton.setBounds (232, y, 150, 40);
-    addButton.setEnabled (cards.size() < bridge::maxInterfaces);
-    y += 60;
-    holder.setSize (w, y);
+        int y = 0;
+        for (auto* c : cards)
+        {
+            const int h = Card::preferredHeight (c->isShared());
+            c->setBounds (x, y, colW, h);
+            y += h + 14;
+        }
+        add.setBounds (x, y, colW, 40);
+        return y + 60;
+    };
+
+    const int left = column (0, inputCards, addInputButton);
+    const int right = column (colW + gap, outputCards, addOutputButton);
+    holder.setSize (w, juce::jmax (left, right));
+    holder.repaint();
 }
 
 //==============================================================================
@@ -387,7 +491,7 @@ void SettingsPage::resized()
     };
     sliderRow ("vMix return", returnSlider, "Network jitter buffer for the NDI return.");
     sliderRow ("Computer audio", computerSlider, "Buffer for computer audio heard in the headphones.");
-    sliderRow ("Between interfaces", crossSlider, "Used only when a mix plays an input from a different interface.");
+    sliderRow ("Between devices", crossSlider, "Used only when a mix plays an input from a different device.");
     y += 10;
 
     headings.push_back ({ "NDI", { x, y, w, 16 } });

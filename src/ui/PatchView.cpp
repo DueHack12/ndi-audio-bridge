@@ -96,7 +96,7 @@ void PatchView::layoutItems()
         {
             if (i != 0) y += groupGap;
             srcLabels.push_back ({ grp == bridge::maxInterfaces ? juce::String ("COMPUTER & NETWORK")
-                                                                : engine.getInterfaceName (grp).toUpperCase(),
+                                                                : engine.getInputDeviceName (grp).toUpperCase(),
                                    { 24.0f, y } });
             y += labelH;
         }
@@ -123,7 +123,7 @@ void PatchView::layoutItems()
         if (i == 0 || grp != bridge::interfaceOfBus (mixes[i - 1].ref.bus))
         {
             if (i != 0) y += groupGap;
-            mixLabels.push_back ({ engine.getInterfaceName (grp).toUpperCase(), { mixX, y } });
+            mixLabels.push_back ({ engine.getOutputDeviceName (grp).toUpperCase(), { mixX, y } });
             y += labelH;
         }
 
@@ -190,7 +190,7 @@ void PatchView::paint (juce::Graphics& g)
     {
         g.setColour (p.dim);
         g.setFont (font (15.0f));
-        g.drawText ("Add an audio interface to start routing", getLocalBounds(), juce::Justification::centred);
+        g.drawText ("Add an input or output device to start routing", getLocalBounds(), juce::Justification::centred);
     }
 
     // ---- wires: idle first, highlighted on top

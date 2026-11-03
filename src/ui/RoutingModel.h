@@ -138,15 +138,18 @@ struct RoutingModel
         return m.isStereo() ? e.getBusLabel (m.bus) : e.getOutputLabel (m.bus, m.side);
     }
 
-    static juce::String shortDevice (AudioEngine& e, int slot)
+    static juce::String shorten (const juce::String& n)
     {
-        auto n = e.getInterfaceName (slot);
         return n.length() > 16 ? n.substring (0, 15) + juce::String::fromUTF8 ("\xe2\x80\xa6") : n;
     }
 
+    static juce::String shortDevice (AudioEngine& e, int slot)        { return shorten (e.getInterfaceName (slot)); }
+    static juce::String shortInputDevice (AudioEngine& e, int slot)   { return shorten (e.getInputDeviceName (slot)); }
+    static juce::String shortOutputDevice (AudioEngine& e, int slot)  { return shorten (e.getOutputDeviceName (slot)); }
+
     static juce::String subtitle (AudioEngine& e, MixRef m)
     {
-        return shortDevice (e, bridge::interfaceOfBus (m.bus)) + " " + outputLabel (e, m) + (m.isStereo() ? juce::String::fromUTF8 (" · stereo") : juce::String::fromUTF8 (" · mono"));
+        return shortOutputDevice (e, bridge::interfaceOfBus (m.bus)) + " " + outputLabel (e, m) + (m.isStereo() ? juce::String::fromUTF8 (" · stereo") : juce::String::fromUTF8 (" · mono"));
     }
 
     static float master (AudioEngine& e, MixRef m)

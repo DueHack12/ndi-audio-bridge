@@ -12,8 +12,8 @@ Runs on **macOS** (11+, Apple Silicon and Intel) and **Windows** (10/11, x64).
 ![NDI Audio Bridge](docs/screenshot.png)
 
 ```
- Interface inputs ─┬────────────► NDI sources "Announcer 1", "Guest Mic", ... ──► vMix
- (up to 4 devices) │
+ Input devices ────┬────────────► NDI sources "Announcer 1", "Guest Mic", ... ──► vMix
+ (any mix of them) │
  Computer audio ───┼────────────► NDI source  "Computer Audio" ─────────────────► vMix
  (virtual output)  │
                    ▼
@@ -29,7 +29,7 @@ Runs on **macOS** (11+, Apple Silicon and Intel) and **Windows** (10/11, x64).
 | **Routing: wires** | Sources on the left (grouped by interface, then computer audio and the vMix return), headphone mixes on the right. **Drag from a source's dot onto a mix** to add it. Click a mix to edit it below. |
 | **Routing: mixer** | One tab per headphone mix. Each source gets a strip: **ON**, **L / R** (for stereo mixes, so a mic can go in one ear only), a fader for its level in this mix, and a meter. The master strip names the mix and sets its overall level. **STEREO / 2× MONO** turns an output pair into one stereo mix or two separate mono feeds. |
 | **Source pop-out** | Click any source. Rename it (that's its NDI name in vMix), switch its NDI send on/off, stereo/mono send, **cough mute** (silences the send to vMix, not the headphones), trim, and every mix it feeds with its own level. For **Computer Audio** pick the virtual device; for **vMix Return** pick the NDI source and its buffer. |
-| **Interfaces** | Add up to four audio interfaces, each with its own driver, sample rate and buffer. **Inputs used / outputs used** hides channels you don't need. |
+| **Inputs & outputs** | Input devices (sent to vMix) and output devices (headphones, speakers) are picked separately, e.g. a USB mic interface in and the computer's speakers out. An input and an output on the same device (a TASCAM) share one clock, so its headphones hear its mics with no extra delay. Each device has its own driver, sample rate, buffer and **inputs/outputs used**. Up to eight devices. |
 | **Companion** | Cough mute from **Bitfocus Companion** (Stream Deck), with an on-air light on the button. Lists the OSC path for every mic, with copy buttons. See [Bitfocus Companion](#bitfocus-companion). |
 | **Settings** | Light or dark mode, the buffers, NDI runtime info. |
 | **Sidebar** | Hover it to expand. At the bottom: CPU (this app vs. the whole computer, and how much is free) and network (what NDI is sending/receiving and how much of the link is free). |
@@ -61,7 +61,7 @@ Everything you change is saved automatically and restored the next time you open
 5. Open **NDI Audio Bridge** and allow **Microphone** (needed to read the interface inputs) and
    **Local Network** (needed for NDI) when macOS asks.
 6. The app picks the TASCAM automatically on first launch if it's plugged in. To check or add
-   another interface, hover the sidebar and open **Interfaces**: 48000 Hz, buffer **128**
+   another device, hover the sidebar and open **Inputs & outputs**: 48000 Hz, buffer **128**
    (raise it to 256 if you hear crackles).
 7. On **Routing**, click **Computer Audio** and under *Plays from* choose **NDI Audio Bridge**.
 
@@ -84,7 +84,7 @@ If you'd rather use stock BlackHole, `brew install blackhole-2ch` and pick
    settings** and set the output device to **CABLE Input**.
 4. Unzip `NDI-Audio-Bridge-Windows.zip` and run **NDI Audio Bridge.exe**. When Windows Firewall
    asks, allow it on **Private networks** (NDI won't work otherwise).
-5. **Interfaces** (in the sidebar): driver **ASIO**, the TASCAM, 48000 Hz, buffer 128. Use ASIO:
+5. **Inputs & outputs** (in the sidebar): driver **ASIO**, the TASCAM as input and output, 48000 Hz, buffer 128. Use ASIO:
    in "Windows Audio" mode the TASCAM's inputs may appear as separate stereo devices.
 6. On **Routing**, click **Computer Audio** and under *Plays from* choose **CABLE Output**.
 
@@ -132,7 +132,7 @@ The app sends feedback to whatever address a command comes from, and remembers t
 
 | Path | Direction | Meaning |
 |---|---|---|
-| `/bridge/in/<i>/<n>/cough/on` · `/off` · `/toggle` | to the app | Cough mute on, off, toggle. `<i>` = interface number, `<n>` = input number (the Companion page lists the exact path for every mic) |
+| `/bridge/in/<i>/<n>/cough/on` · `/off` · `/toggle` | to the app | Cough mute on, off, toggle. `<i>` = input device number, `<n>` = input number (the Companion page lists the exact path for every mic) |
 | `/bridge/in/<i>/<n>/cough` + integer | to the app | 1 = mute, 0 = unmute (without an argument it toggles) |
 | `/bridge/computer/cough/…` | to the app | The same for computer audio |
 | `/bridge/refresh` | to the app | Send every value again |
@@ -150,8 +150,9 @@ OSC control turned off) on the Companion page.
 
 * Interface buffer 128 samples @ 48 kHz ≈ 2.7 ms. Headphone mixes run at this latency,
   so announcers hear themselves and each other almost instantly.
-* A mix that plays an input from a *different* interface adds the **between interfaces** buffer
-  (default 25 ms, in Settings), because the two interfaces run on separate clocks.
+* A mix that plays an input from a *different* device adds the **between devices** buffer
+  (default 25 ms, in Settings), because the two devices run on separate clocks. An input and
+  an output on the same device (e.g. the TASCAM's mics in its own headphones) don't.
 * NDI sends go out in 10 ms frames; vMix adds its own buffering on top.
 * The return **buffer** (default 60 ms, in the vMix Return pop-out) covers network jitter. On a
   solid wired network you can lower it to ~30 ms. If its status line shows the *dropouts* count
@@ -166,7 +167,7 @@ OSC control turned off) on the Companion page.
 | Status says "Live, 0 receivers" | The source is on the network, but vMix hasn't added it as an input yet. |
 | Meters move but no sound in vMix | Check the source isn't on **cough mute** and the input is unmuted in vMix. |
 | Everyone hears every mic whatever the mixes say | Turn the TASCAM's MONITOR MIX knob fully to COMPUTER. |
-| An interface chip is red | It's unplugged or busy. The app retries every few seconds; check **Interfaces**. |
+| A device chip is red | It's unplugged or busy. The app retries every few seconds; check **Inputs & outputs**. |
 | No input level at all on macOS | System Settings > Privacy & Security > Microphone: enable NDI Audio Bridge. |
 | Computer audio silent | System (or Windows) output must be set to the virtual device, and the same device picked under *Plays from* in the **Computer Audio** pop-out. |
 | Return crackles or drops out | Raise the return **Buffer**, use wired Ethernet rather than Wi-Fi. |
@@ -215,7 +216,8 @@ workflow creates the `v0.1.1` tag and release with both zips. Pushing a `v*` tag
 drifting network feed (±300 ppm, 25/30 fps frame sizes, 48 kHz → 44.1 kHz) and checks for
 zero dropouts, steady latency and a click-free signal. It also drives the real mixing engine with
 two fake interfaces to check per-side routing, per-source levels, mono folding and mixing
-across interfaces, and sends real OSC packets to the Companion control to check cough on/off/
+across interfaces, checks that separate input and output devices pair up, split and keep
+their routing, and sends real OSC packets to the Companion control to check cough on/off/
 toggle and the feedback that comes back. If an NDI runtime is installed, it also
 sends a tone through a real NDI sender and receiver and checks it arrives intact.
 

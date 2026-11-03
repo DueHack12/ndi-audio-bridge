@@ -123,6 +123,19 @@ void drawIcon (juce::Graphics& g, Icon icon, juce::Rectangle<float> area, juce::
             p.startNewSubPath (12, 5); p.lineTo (12, 19);
             p.startNewSubPath (5, 12); p.lineTo (19, 12);
             break;
+        case Icon::mic:
+            p.addRoundedRectangle (9.0f, 3.0f, 6.0f, 11.0f, 3.0f);
+            p.startNewSubPath (5.5f, 11.0f);
+            p.cubicTo (5.5f, 19.0f, 18.5f, 19.0f, 18.5f, 11.0f);
+            p.startNewSubPath (12.0f, 17.0f); p.lineTo (12.0f, 21.0f);
+            p.startNewSubPath (8.5f, 21.0f); p.lineTo (15.5f, 21.0f);
+            break;
+        case Icon::speaker:
+            p.startNewSubPath (4.0f, 9.5f); p.lineTo (8.0f, 9.5f); p.lineTo (12.5f, 5.0f);
+            p.lineTo (12.5f, 19.0f); p.lineTo (8.0f, 14.5f); p.lineTo (4.0f, 14.5f); p.closeSubPath();
+            p.startNewSubPath (15.5f, 9.0f); p.cubicTo (17.5f, 10.5f, 17.5f, 13.5f, 15.5f, 15.0f);
+            p.startNewSubPath (18.0f, 6.5f); p.cubicTo (21.5f, 9.5f, 21.5f, 14.5f, 18.0f, 17.5f);
+            break;
         case Icon::headphones:
             p.startNewSubPath (4, 17); p.lineTo (4, 12);
             p.cubicTo (4, 2, 20, 2, 20, 12); p.lineTo (20, 17);
