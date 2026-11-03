@@ -61,6 +61,9 @@ public:
     juce::String getLastCommand() const { return lastCommand; }
     juce::String getLastCommandFrom() const { return lastCommandFrom; }
     juce::uint32 getLastCommandTime() const noexcept { return lastCommandMs; }
+    /** Where feedback goes ("127.0.0.1:9501, ..."), empty if nobody yet, and when it last went. */
+    juce::String getFeedbackTargets() const { return feedbackTargets; }
+    juce::uint32 getLastFeedbackTime() const noexcept { return lastFeedbackMs; }
 
     /** Base OSC address of a source ("/bridge/in/1/3", "/bridge/computer"); empty if it has none. */
     static juce::String addressFor (int source);
@@ -124,6 +127,8 @@ private:
     bool needFull = true, configChanged = false;
     juce::String lastCommand, lastCommandFrom;
     juce::uint32 lastCommandMs = 0;
+    juce::String feedbackTargets;
+    juce::uint32 lastFeedbackMs = 0;
 
     JUCE_DECLARE_NON_COPYABLE (RemoteControl)
 };

@@ -50,16 +50,19 @@ struct Reader
     }
 };
 
-bool parseMessage (const juce::uint8* data, size_t size, std::vector<RemoteControl::Message>& out)
+/** Parses one message; returns the bytes it used (0 = not OSC). */
+size_t parseMessage (const juce::uint8* data, size_t size, std::vector<RemoteControl::Message>& out)
 {
     Reader r { data, size };
     RemoteControl::Message m;
     if (! r.string (m.address) || ! m.address.startsWithChar ('/'))
-        return false;
+        return 0;
 
     juce::String tags;
     if (r.pos < size && (! r.string (tags) || ! tags.startsWithChar (',')))
-        return false;
+        return 0;
+
+    bool complete = true;
 
     for (int t = 1; t < tags.length(); ++t)
     {
@@ -101,12 +104,15 @@ bool parseMessage (const juce::uint8* data, size_t size, std::vector<RemoteContr
         }
 
         if (! ok)
+        {
+            complete = false; // where this message ends is unknown: don't look for more after it
             break;
+        }
         m.args.push_back (std::move (a));
     }
 
     out.push_back (std::move (m));
-    return true;
+    return complete ? r.pos : size;
 }
 
 bool parsePacket (const juce::uint8* data, size_t size, std::vector<RemoteControl::Message>& out, int depth)
@@ -127,7 +133,21 @@ bool parsePacket (const juce::uint8* data, size_t size, std::vector<RemoteContro
         return any;
     }
 
-    return size >= 4 && parseMessage (data, size, out);
+    // One message, or several back to back: a socket read can return more than one datagram.
+    bool any = false;
+    size_t pos = 0;
+    while (size - pos >= 4)
+    {
+        if (size - pos >= 16 && std::memcmp (data + pos, "#bundle", 8) == 0)
+            return parsePacket (data + pos, size - pos, out, depth + 1) || any;
+
+        const auto used = parseMessage (data + pos, size - pos, out);
+        if (used == 0)
+            break;
+        any = true;
+        pos += used;
+    }
+    return any;
 }
 
 void writeString (juce::MemoryOutputStream& o, const juce::String& s)
@@ -434,6 +454,10 @@ std::vector<RemoteControl::Peer> RemoteControl::destinations() const
 void RemoteControl::sendFeedback()
 {
     const auto dests = destinations();
+    juce::StringArray names;
+    for (auto& d : dests)
+        names.add (d.host + ":" + juce::String (d.port));
+    feedbackTargets = names.joinIntoString (", ");
     if (dests.empty())
         return;
 
@@ -481,6 +505,7 @@ void RemoteControl::sendFeedback()
     if (packets.empty())
         return;
 
+    lastFeedbackMs = now;
     std::lock_guard<std::mutex> g (queueLock);
     for (auto& d : dests)
         for (auto& p : packets)

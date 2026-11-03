@@ -346,6 +346,15 @@ void companionControl()
 
         m.clear();
         check (! RemoteControl::parse ("hello", 5, m) && m.empty(), "non-OSC data is ignored");
+
+        // a socket read can hand over two datagrams at once, e.g. a quick press + release
+        juce::MemoryOutputStream two;
+        two << oscNoArgs ("/bridge/in/1/1/cough/on") << RemoteControl::encode ("/bridge/in/1/1/cough", 0) << oscNoArgs ("/bridge/refresh");
+        m.clear();
+        const bool parsed = RemoteControl::parse (two.getData(), two.getDataSize(), m);
+        check (parsed && m.size() == 3 && m[0].address == "/bridge/in/1/1/cough/on"
+                   && m[1].address == "/bridge/in/1/1/cough" && m[1].args.size() == 1 && m[1].args[0].i == 0 && m[2].address == "/bridge/refresh",
+               "back-to-back messages in one read are all parsed (" + juce::String ((int) m.size()) + ")");
     }
 
     // ---- end to end over UDP on localhost
@@ -420,6 +429,12 @@ void companionControl()
 
     send (oscNoArgs ("/bridge/computer/cough/on"));
     check (pump ([&] { return muted (bridge::computerSource) && fbInt ("/bridge/computer/cough") == 1; }), "computer audio cough works too");
+
+    // press + release arriving together must end unmuted
+    send (oscNoArgs ("/bridge/in/1/3/cough/on"));
+    send (oscNoArgs ("/bridge/in/1/3/cough/off"));
+    check (pump ([&] { return fbInt ("/bridge/in/1/3/cough") == 0 && ! muted (bridge::sourceIndex (0, 2)); }) && remote.getFeedbackTargets().isNotEmpty(),
+           "press-to-cough: on then off straight away ends unmuted (feedback to " + remote.getFeedbackTargets() + ")");
 
     send (oscNoArgs ("/bridge/in/1/9/cough/on"));   // the fake interface has 4 inputs
     send (oscNoArgs ("/bridge/in/3/1/cough/on"));   // no third interface

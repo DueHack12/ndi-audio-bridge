@@ -164,13 +164,20 @@ public:
                                 ? juce::String ("Nothing received yet")
                                 : remote.getLastCommand() + "  from " + remote.getLastCommandFrom() + juce::String::fromUTF8 ("  \xc2\xb7  ")
                                       + agoText (remote.getLastCommandTime());
+        const auto targets = remote.getFeedbackTargets();
+        juce::String fb = targets.isEmpty()
+                              ? juce::String ("Nowhere yet: press a button in Companion once (with Listen for Feedback on)")
+                              : "To " + targets + (remote.getLastFeedbackTime() == 0 ? juce::String()
+                                                                                    : juce::String::fromUTF8 ("  \xc2\xb7  last sent ")
+                                                                                          + agoText (remote.getLastFeedbackTime()));
         const auto ips = machineAddresses();
         const auto& c = remote.getConfig();
         const bool configMoved = (! feedbackEditor.hasKeyboardFocus (false) && feedbackEditor.getText() != c.feedbackTo);
 
-        if (last != lastCommandText || ips != addresses || configMoved)
+        if (last != lastCommandText || fb != feedbackText || ips != addresses || configMoved)
         {
             lastCommandText = last;
+            feedbackText = fb;
             addresses = ips;
             if (configMoved)
                 feedbackEditor.setText (c.feedbackTo, false);
@@ -311,6 +318,9 @@ public:
         notes.push_back ({ lastCommandText.isEmpty() ? juce::String ("Nothing received yet") : lastCommandText,
                            { controlX, r, w - controlX - 20, rowH } });
 
+        r = row ("Feedback");
+        notes.push_back ({ feedbackText, { controlX, r, w - controlX - 20, rowH } });
+
         cards.push_back ({ 0, cardTop, w, y - cardTop });
         y += 30;
 
@@ -326,8 +336,9 @@ public:
                 + "Protocol *UDP*" + dot + "tick *Listen for Feedback*" + dot + "Source Port: any free port, e.g. *" + juce::String (c.port < 65535 ? c.port + 1 : c.port - 1) + "*.",
             "On a button, add the press action *Send message without arguments* with a mic's *toggle* path from the list below. "
             "For press-to-cough, send the *cough/on* path on press and *cough/off* on release.",
-            "Add the feedback *Listen for OSC messages (Integer)* with the mic's *live* path and Value *1*, and give it a red background: "
-            "the button lights only while that mic is really going to vMix."
+            "Add the feedback *Listen for OSC messages (Integer)* with the mic's *live* path, Value *1*, and a red background. "
+            "*live* is 1 only while the mic is really going to vMix: not coughed, and vMix has this NDI source as an input "
+            "(status *LIVE* below). Testing without vMix? Use the *cough* path instead: it lights while the mic is coughed."
         };
 
         for (int i = 0; i < 3; ++i)
@@ -422,8 +433,9 @@ private:
             else                        { text = "LIVE";        bg = p.okBg;                     fg = p.okFg; }
 
             const auto n = e.getSourceConfig (source).name;
-            if (text != chip || bg != chipBg || n != name)
+            if (text != chip || bg != chipBg || n != name || st.live != live)
             {
+                live = st.live;
                 chip = text;
                 chipBg = bg;
                 chipFg = fg;
@@ -446,14 +458,20 @@ private:
 
             g.setColour (p.text);
             g.setFont (font (14.0f, true));
-            g.drawText (name, r.removeFromLeft (128.0f), juce::Justification::centredLeft, true);
+            g.drawText (name, r.removeFromLeft (120.0f), juce::Justification::centredLeft, true);
 
             g.setColour (p.dim);
             g.setFont (font (11.5f));
             g.drawText (RoutingModel::sourceTag (source), r.removeFromLeft (40.0f), juce::Justification::centredLeft, false);
 
             drawChip (g, r.removeFromLeft (96.0f).withSizeKeepingCentre (96.0f, 22.0f), chip, chipBg, chipFg);
-            r.removeFromLeft (16.0f);
+            r.removeFromLeft (10.0f);
+
+            // exactly what Companion's "live" feedback receives
+            g.setFont (monoFont (12.0f));
+            g.setColour (live ? p.green : p.faint);
+            g.drawText (live ? "live 1" : "live 0", r.removeFromLeft (54.0f), juce::Justification::centredLeft, false);
+            r.removeFromLeft (6.0f);
 
             g.setColour (p.text);
             g.setFont (monoFont (12.5f));
@@ -483,6 +501,7 @@ private:
         const int source;
         const juce::Colour colour;
         juce::String base, name, chip;
+        bool live = false;
         juce::Colour chipBg, chipFg;
         FlatButton copyToggle { "Copy toggle" }, copyLive { "Copy live" };
         FlatButton coughButton { "Cough", FlatButton::Kind::danger };
@@ -532,7 +551,7 @@ private:
 
     std::vector<Address> addresses;
     juce::Rectangle<int> computerArea;
-    juce::String lastCommandText;
+    juce::String lastCommandText, feedbackText;
     juce::uint32 lastSlowTick = 0;
 
     std::vector<std::pair<juce::String, juce::Rectangle<int>>> headings, labels, notes;

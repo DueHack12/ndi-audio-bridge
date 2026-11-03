@@ -1,3 +1,8 @@
+## What's new in 0.4.2
+
+- **Companion page** shows exactly what the buttons receive: `live 0` / `live 1` next to every mic, and a *Feedback* row with where feedback goes and when it was last sent. The setup steps explain when `live` is 1 (not coughed **and** vMix has the source as an input) and how to test without vMix (use the `cough` path).
+- Fixed: two OSC messages arriving together (e.g. a quick press and release for press-to-cough) could lose the second one.
+
 ## What's new in 0.4.1
 
 - **Companion page:** *This computer* now shows only real IPv4 addresses, with the adapter name, and the likely network address first. Windows was also listing multicast groups (224.x, 239.x) and putting VPN adapters (e.g. Radmin VPN's 26.x) ahead of Ethernet/Wi-Fi.

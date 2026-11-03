@@ -171,8 +171,8 @@ OSC control turned off) on the Companion page.
 | Computer audio silent | System (or Windows) output must be set to the virtual device, and the same device picked under *Plays from* in the **Computer Audio** pop-out. |
 | Return crackles or drops out | Raise the return **Buffer**, use wired Ethernet rather than Wi-Fi. |
 | Companion buttons do nothing | On the **Companion** page, check *Last command*. Nothing there: wrong IP/port in Companion, or a firewall: allow NDI Audio Bridge on Private networks (Windows) or accept incoming connections (macOS). |
-| Companion buttons work but never light up | Tick **Listen for Feedback** and set a **Source Port** in the Companion connection, then press a button once. *Send feedback to* on the Companion page should show Companion's IP and that port. |
-| `live` stays 0 although the mic isn't coughed | `live` also needs vMix to have the source open (*receivers* ≥ 1) and the NDI send switched on. |
+| Companion buttons work but never light up | A button on the `live` path stays dark while the mic is coughed **and** until vMix has that NDI source as an input: the Companion page shows `live 0` / `live 1` for every mic. To check feedback without vMix, use the `…/cough` path (lights while coughed). If that stays dark too: tick **Listen for Feedback**, set a **Source Port**, press a button once, and check the *Feedback* row on the Companion page shows Companion's IP and that port. |
+| `live` stays 0 although the mic isn't coughed | `live` also needs vMix to have the source open (*receivers* ≥ 1, status **LIVE** on the Companion page) and the NDI send switched on. |
 
 ---
 
