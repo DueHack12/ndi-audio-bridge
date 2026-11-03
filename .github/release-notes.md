@@ -1,3 +1,7 @@
+## What's new in 0.4.1
+
+- **Companion page:** *This computer* now shows only real IPv4 addresses, with the adapter name, and the likely network address first. Windows was also listing multicast groups (224.x, 239.x) and putting VPN adapters (e.g. Radmin VPN's 26.x) ahead of Ethernet/Wi-Fi.
+
 ## What's new in 0.4.0
 
 - **Bitfocus Companion control.** Cough-mute any mic from a Stream Deck button (on, off, toggle, or press-to-cough), with feedback that lights the button only while that mic is really going to vMix: NDI send on, cough off, interface running and vMix connected. Uses Companion's built-in **Generic: OSC** connection on UDP port 9500.

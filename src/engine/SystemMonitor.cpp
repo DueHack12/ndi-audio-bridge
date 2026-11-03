@@ -1,6 +1,9 @@
 // Platform code only, no JUCE headers, so the OS headers stay out of JUCE's way.
 #include "SystemMonitor.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -24,8 +27,13 @@
  #include <sys/resource.h>
  #include <ifaddrs.h>
  #include <net/if.h>
+ #include <netinet/in.h>
 #else
  #include <sys/resource.h>
+ #include <sys/socket.h>
+ #include <ifaddrs.h>
+ #include <net/if.h>
+ #include <netinet/in.h>
  #include <fstream>
  #include <sstream>
 #endif
@@ -181,6 +189,116 @@ std::vector<SystemMonitor::NetCounter> readNet()
 }
 #endif
 
+//==============================================================================
+// Local IPv4 addresses
+SystemMonitor::LocalAddress makeAddress (const unsigned char* b, const std::string& adapter, const std::string& description)
+{
+    SystemMonitor::LocalAddress a;
+    a.ip = std::to_string (b[0]) + "." + std::to_string (b[1]) + "." + std::to_string (b[2]) + "." + std::to_string (b[3]);
+    a.adapter = adapter;
+
+    std::string text = adapter + " " + description;
+    std::transform (text.begin(), text.end(), text.begin(), [] (unsigned char c) { return (char) std::tolower (c); });
+    for (const char* v : { "vethernet", "virtual", "hyper-v", "vmware", "vmnet", "virtualbox", "vbox", "wsl", "docker", "veth",
+                           "virbr", "br-", "bridge", "radmin", "hamachi", "zerotier", "tailscale", "wireguard", "vpn", "tap-",
+                           "tun", "utun", "ppp", "awdl", "llw", "loopback", "npcap" })
+        if (text.find (v) != std::string::npos)
+            a.isVirtual = true;
+
+    return a;
+}
+
+bool usableAddress (const unsigned char* b)
+{
+    return b[0] != 0 && b[0] != 127 && b[0] < 224         // "this network", loopback, multicast & reserved
+        && ! (b[0] == 169 && b[1] == 254);                // link-local (no DHCP)
+}
+
+int addressRank (const SystemMonitor::LocalAddress& a)
+{
+    int b0 = 0, b1 = 0;
+    std::sscanf (a.ip.c_str(), "%d.%d", &b0, &b1);
+    int rank = 3;                                                    // public, or a VPN's range (e.g. Radmin's 26.x)
+    if (b0 == 192 && b1 == 168)                rank = 0;
+    else if (b0 == 10)                         rank = 1;
+    else if (b0 == 172 && b1 >= 16 && b1 < 32) rank = 2;
+    else if (b0 == 100 && b1 >= 64 && b1 < 128) rank = 4;          // carrier-grade NAT / Tailscale
+    return rank + (a.isVirtual ? 10 : 0);
+}
+
+#if defined (_WIN32)
+std::string narrow (const wchar_t* w)
+{
+    if (w == nullptr || *w == 0)
+        return {};
+    const int n = WideCharToMultiByte (CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    std::string s ((size_t) std::max (0, n - 1), '\0');
+    if (n > 1)
+        WideCharToMultiByte (CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
+    return s;
+}
+
+std::vector<SystemMonitor::LocalAddress> readAddresses()
+{
+    std::vector<SystemMonitor::LocalAddress> out;
+    std::vector<unsigned char> buffer;
+    ULONG size = 32 * 1024, result = ERROR_BUFFER_OVERFLOW;
+
+    for (int attempt = 0; attempt < 4 && result == ERROR_BUFFER_OVERFLOW; ++attempt)
+    {
+        buffer.resize (size);
+        result = GetAdaptersAddresses (AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                       nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES*> (buffer.data()), &size);
+    }
+
+    if (result != NO_ERROR)
+        return out;
+
+    for (auto* a = reinterpret_cast<IP_ADAPTER_ADDRESSES*> (buffer.data()); a != nullptr; a = a->Next)
+    {
+        if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+            continue;
+
+        const auto name = narrow (a->FriendlyName), description = narrow (a->Description);
+        for (auto* u = a->FirstUnicastAddress; u != nullptr; u = u->Next)
+        {
+            const auto* sa = u->Address.lpSockaddr;
+            if (sa == nullptr || sa->sa_family != AF_INET)
+                continue;
+
+            const auto* b = reinterpret_cast<const unsigned char*> (&reinterpret_cast<const sockaddr_in*> (sa)->sin_addr);
+            if (usableAddress (b))
+                out.push_back (makeAddress (b, name, description));
+        }
+    }
+
+    return out;
+}
+#else
+std::vector<SystemMonitor::LocalAddress> readAddresses()
+{
+    std::vector<SystemMonitor::LocalAddress> out;
+    ifaddrs* list = nullptr;
+    if (getifaddrs (&list) != 0)
+        return out;
+
+    for (auto* a = list; a != nullptr; a = a->ifa_next)
+    {
+        if (a->ifa_addr == nullptr || a->ifa_addr->sa_family != AF_INET)
+            continue;
+        if ((a->ifa_flags & IFF_LOOPBACK) != 0 || (a->ifa_flags & IFF_UP) == 0)
+            continue;
+
+        const auto* b = reinterpret_cast<const unsigned char*> (&reinterpret_cast<const sockaddr_in*> (a->ifa_addr)->sin_addr);
+        if (usableAddress (b))
+            out.push_back (makeAddress (b, a->ifa_name != nullptr ? a->ifa_name : "", {}));
+    }
+
+    freeifaddrs (list);
+    return out;
+}
+#endif
+
 #if ! defined (_WIN32)
 double processCpuSeconds()
 {
@@ -192,6 +310,25 @@ double processCpuSeconds()
 }
 #endif
 } // namespace
+
+std::vector<SystemMonitor::LocalAddress> SystemMonitor::listAddresses()
+{
+    auto list = readAddresses();
+    sortByPreference (list);
+    return list;
+}
+
+bool SystemMonitor::isUsableIPv4 (const unsigned char* bytes)  { return usableAddress (bytes); }
+
+SystemMonitor::LocalAddress SystemMonitor::describeAddress (const unsigned char* bytes, const std::string& adapter, const std::string& description)
+{
+    return makeAddress (bytes, adapter, description);
+}
+
+void SystemMonitor::sortByPreference (std::vector<LocalAddress>& list)
+{
+    std::stable_sort (list.begin(), list.end(), [] (const LocalAddress& a, const LocalAddress& b) { return addressRank (a) < addressRank (b); });
+}
 
 void SystemMonitor::update()
 {

@@ -1,19 +1,27 @@
 #include "CompanionPage.h"
 #include "engine/RemoteControl.h"
+#include "engine/SystemMonitor.h"
 
 namespace ui
 {
 namespace
 {
-juce::StringArray machineAddresses()
+struct Address
 {
-    juce::StringArray out;
-    for (auto& a : juce::IPAddress::getAllAddresses (false))
+    juce::String ip, adapter;
+    bool operator== (const Address& o) const { return ip == o.ip && adapter == o.adapter; }
+    bool operator!= (const Address& o) const { return ! operator== (o); }
+};
+
+/** Real IPv4 addresses, the likely LAN one first (see SystemMonitor::listAddresses). */
+std::vector<Address> machineAddresses()
+{
+    std::vector<Address> out;
+    for (auto& a : SystemMonitor::listAddresses())
     {
-        const auto s = a.toString();
-        if (s.startsWith ("127.") || s.startsWith ("169.254.") || s == "0.0.0.0")
-            continue;
-        out.addIfNotAlreadyThere (s);
+        Address x { juce::String::fromUTF8 (a.ip.c_str()), juce::String::fromUTF8 (a.adapter.c_str()) };
+        if (std::find_if (out.begin(), out.end(), [&] (const Address& y) { return y.ip == x.ip; }) == out.end())
+            out.push_back (x);
     }
     return out;
 }
@@ -202,10 +210,40 @@ public:
         for (auto& n : notes)
             g.drawFittedText (n.first, n.second, juce::Justification::centredLeft, 2, 1.0f);
 
-        g.setFont (monoFont (13.0f));
-        g.setColour (p.text);
-        for (auto& v : values)
-            g.drawText (v.first, v.second, juce::Justification::centredLeft, true);
+        // this computer's address(es): the likely LAN one large, any others small underneath
+        {
+            auto area = computerArea.toFloat();
+            if (addresses.empty())
+            {
+                g.setFont (font (13.0f));
+                g.setColour (p.dim);
+                g.drawText ("No network connection", area, juce::Justification::centredLeft, true);
+            }
+            else
+            {
+                auto line = addresses.size() > 1 ? area.removeFromTop (area.getHeight() * 0.56f) : area;
+                const auto& first = addresses.front();
+                g.setFont (monoFont (14.0f));
+                g.setColour (p.text);
+                const float ipW = juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), first.ip) + 12.0f;
+                g.drawText (first.ip, line.removeFromLeft (ipW), addresses.size() > 1 ? juce::Justification::bottomLeft
+                                                                                    : juce::Justification::centredLeft, false);
+                g.setFont (font (12.5f));
+                g.setColour (p.dim);
+                g.drawText (first.adapter, line, addresses.size() > 1 ? juce::Justification::bottomLeft
+                                                                       : juce::Justification::centredLeft, true);
+
+                if (addresses.size() > 1)
+                {
+                    juce::StringArray others;
+                    for (size_t i = 1; i < addresses.size(); ++i)
+                        others.add (addresses[i].ip + (addresses[i].adapter.isNotEmpty() ? " (" + addresses[i].adapter + ")" : juce::String()));
+                    g.setFont (font (11.5f));
+                    g.setColour (p.faint);
+                    g.drawText ("Also " + others.joinIntoString (", "), area.withTrimmedTop (2.0f), juce::Justification::topLeft, true);
+                }
+            }
+        }
 
         for (auto& s : steps)
         {
@@ -226,7 +264,6 @@ public:
         headings.clear();
         labels.clear();
         notes.clear();
-        values.clear();
         cards.clear();
         dividers.clear();
         steps.clear();
@@ -268,8 +305,7 @@ public:
                            { controlX + 226, r, w - controlX - 244, rowH } });
 
         r = row ("This computer");
-        values.push_back ({ addresses.isEmpty() ? juce::String ("No network") : addresses.joinIntoString (", "),
-                            { controlX, r, w - controlX - 20, rowH } });
+        computerArea = { controlX, r + 6, w - controlX - 20, rowH - 12 };
 
         r = row ("Last command");
         notes.push_back ({ lastCommandText.isEmpty() ? juce::String ("Nothing received yet") : lastCommandText,
@@ -282,7 +318,7 @@ public:
         headings.push_back ({ "SET UP IN COMPANION", { 0, y, w, 16 } });
         y += 26;
 
-        const auto ip = addresses.isEmpty() ? juce::String ("this computer's IP") : addresses[0];
+        const auto ip = addresses.empty() ? juce::String ("this computer's IP") : addresses.front().ip;
         const auto port = juce::String (c.port);
         const juce::String dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
         const juce::String stepText[] = {
@@ -494,11 +530,12 @@ private:
     juce::TextEditor portEditor, feedbackEditor;
     juce::OwnedArray<Row> rows;
 
-    juce::StringArray addresses;
+    std::vector<Address> addresses;
+    juce::Rectangle<int> computerArea;
     juce::String lastCommandText;
     juce::uint32 lastSlowTick = 0;
 
-    std::vector<std::pair<juce::String, juce::Rectangle<int>>> headings, labels, notes, values;
+    std::vector<std::pair<juce::String, juce::Rectangle<int>>> headings, labels, notes;
     std::vector<juce::Rectangle<int>> cards, dividers;
     std::vector<Step> steps;
 };

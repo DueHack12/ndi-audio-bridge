@@ -11,6 +11,7 @@
 #include "dsp/DriftFifo.h"
 #include "engine/AudioEngine.h"
 #include "engine/RemoteControl.h"
+#include "engine/SystemMonitor.h"
 #include "ndi/NdiFinder.h"
 #include "ndi/NdiLibrary.h"
 #include "ndi/NdiReceiver.h"
@@ -436,6 +437,40 @@ void companionControl()
 
     remote.setConfig ({ false, port, remote.getConfig().feedbackTo });
     check (! remote.isListening(), "turning it off closes the port");
+
+    // ---- "This computer" address: a Windows PC with Radmin VPN, WSL and Tailscale, as Windows reports it
+    struct Raw { unsigned char b[4]; const char* adapter; const char* description; };
+    const Raw raw[] = {
+        { { 26, 219, 6, 16 },    "Radmin VPN",        "Famatech Radmin VPN Ethernet Adapter" },
+        { { 224, 0, 0, 251 },    "Ethernet",          "Realtek PCIe GbE Family Controller" },   // multicast group
+        { { 239, 255, 102, 18 }, "Ethernet",          "Realtek PCIe GbE Family Controller" },
+        { { 255, 255, 255, 255 },"Ethernet",          "Realtek PCIe GbE Family Controller" },
+        { { 169, 254, 3, 7 },    "Bluetooth Network", "Bluetooth Device (Personal Area Network)" },
+        { { 100, 101, 1, 2 },    "Tailscale",         "Tailscale Tunnel" },
+        { { 172, 26, 0, 1 },     "vEthernet (WSL)",   "Hyper-V Virtual Ethernet Adapter" },
+        { { 192, 168, 1, 50 },   "Ethernet",          "Realtek PCIe GbE Family Controller" },
+        { { 127, 0, 0, 1 },      "Loopback",          "Software Loopback Interface 1" },
+    };
+    std::vector<SystemMonitor::LocalAddress> list;
+    for (auto& r : raw)
+        if (SystemMonitor::isUsableIPv4 (r.b))
+            list.push_back (SystemMonitor::describeAddress (r.b, r.adapter, r.description));
+    SystemMonitor::sortByPreference (list);
+
+    juce::StringArray order;
+    for (auto& a : list)
+        order.add (juce::String (a.ip) + (a.isVirtual ? "*" : ""));
+    check (order.joinIntoString (" ") == "192.168.1.50 172.26.0.1* 26.219.6.16* 100.101.1.2*",
+           "addresses: no multicast/loopback/link-local, the LAN one first (" + order.joinIntoString (" ") + ")");
+    bool clean = true;
+    juce::StringArray here;
+    for (auto& a : SystemMonitor::listAddresses())
+    {
+        const int b0 = juce::String (a.ip).getIntValue();
+        clean = clean && b0 != 127 && b0 < 224 && ! juce::String (a.ip).startsWith ("169.254.");
+        here.add (juce::String (a.ip) + " (" + juce::String (a.adapter) + ")");
+    }
+    check (clean, "this machine: " + (here.isEmpty() ? juce::String ("no network") : here.joinIntoString (", ")));
 }
 
 void ndiLoopback()
